@@ -353,6 +353,7 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
             "orders": results, "rejected": verdict.rejected, "halted": verdict.halted,
             "equity": account_after["equity"], "cash": account_after["cash"], "day_pl": day_pl,
             "missed": missed, "reconciled": reconciled, "picks": picks,
+            "news_n": len(news), "signals_n": len(sig),
         }
         store.write(baton)
 

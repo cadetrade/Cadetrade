@@ -74,3 +74,11 @@ Con Claude Code serve `claude setup-token` e il token in `secrets.toml`.
 - Oro, Nasdaq e S&P 500 sono gli ETF (orari della borsa USA), non i CFD XAU/USD, US100, US500 che girano quasi 24 ore.
 - "Imparare" qui vuol dire lezioni scritte e riviste ogni settimana: con pochi trade il rischio è inseguire il rumore.
 - Nessuna garanzia di guadagno. Questo sistema misura disciplina, non dimostra un vantaggio sul mercato.
+
+
+## Pannello dal vivo
+
+Il bot serve una pagina animata sulla porta 8080 del server: `http://IP-DEL-SERVER:8080/?k=CHIAVE`.
+La chiave è la variabile `DASHBOARD_KEY` del progetto Docker; senza chiave il pannello resta spento.
+Mostra cosa sta facendo adesso (Claude che ragiona, il guardiano), conto, rischio aperto, posizioni con i loro stop,
+grafico a candele, ultimo ragionamento, messaggi in diretta, lezioni e trade chiusi. È di sola lettura.

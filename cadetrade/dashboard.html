@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CadeTrade sala operativa</title>
+<style>
+:root{--bg:#06070d;--panel:#0c0f1b;--line:#1d2340;--text:#e9ecfb;--mute:#7d86a8;--neon:#ff2fb4;--cyan:#22e4ff;--up:#2bf0a8;--down:#ff4d6d;--gold:#ffc94d;--vio:#9a7bff}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+body{min-height:100vh;background:radial-gradient(900px 500px at 85% -10%,#2a0b3d 0,transparent 60%),radial-gradient(800px 500px at -10% 110%,#062a33 0,transparent 55%),var(--bg)}
+.frame{max-width:1280px;margin:0 auto;padding:12px;border:2px solid var(--neon);border-radius:14px;margin-top:10px;box-shadow:0 0 30px #ff2fb433,inset 0 0 30px #ff2fb411}
+@media(max-width:700px){.frame{border-width:1px;margin:6px;padding:8px}}
+header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.logo{font-weight:800;letter-spacing:1px;color:var(--neon);text-shadow:0 0 12px var(--neon)}
+.logo small{color:var(--mute);font-weight:500;letter-spacing:0;margin-left:8px;text-shadow:none}@media(max-width:600px){.logo small{display:none}}
+.clock{margin-left:auto;background:#140a1c;border:1px solid var(--neon);color:#ffd6f0;padding:3px 10px;border-radius:6px;font-size:12px}
+.live{width:8px;height:8px;border-radius:50%;background:var(--up);box-shadow:0 0 10px var(--up);animation:blink 1.4s infinite}
+@keyframes blink{50%{opacity:.25}}
+/* agenti */
+.agents{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+@media(max-width:900px){.agents{grid-template-columns:repeat(2,1fr)}}
+.ag{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;position:relative;overflow:hidden;min-height:74px;transition:border-color .4s,box-shadow .4s}
+.ag .h{display:flex;align-items:center;gap:6px;font-weight:800;font-size:12px;letter-spacing:.6px}
+.ag .h i{width:10px;height:10px;border-radius:3px;display:inline-block;background:var(--c);box-shadow:0 0 8px var(--c)}
+.ag .h span{margin-left:auto;font-weight:500;color:var(--mute);font-size:11px}
+.ag .t{color:#c9cfee;font-size:12px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag .bar{position:absolute;left:0;bottom:0;height:2px;background:var(--c);width:0;box-shadow:0 0 8px var(--c)}
+.ag.on{border-color:var(--c);box-shadow:0 0 18px color-mix(in srgb,var(--c) 35%,transparent)}
+.ag.on .bar{animation:load 1.6s ease-in-out infinite}
+@keyframes load{0%{width:0;left:0}50%{width:60%;left:20%}100%{width:0;left:100%}}
+/* sala */
+.floor{position:relative;border:1px solid var(--line);border-radius:12px;background:#080b16;overflow:hidden;margin-bottom:10px}
+canvas{display:block;width:100%}
+.floorHud{display:flex;gap:10px;align-items:stretch;padding:10px 10px 0}
+.status{background:#0d1122cc;border:1px solid var(--line);border-radius:8px;padding:6px 10px;flex:1;display:block}
+.status b{color:var(--gold)}
+.count{background:#0d1122cc;border:1px solid var(--line);border-radius:8px;padding:6px 10px;text-align:right;flex:none}
+.count b{font-size:20px;color:var(--cyan)}
+/* pannelli */
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
+.p{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0}
+.c3{grid-column:span 3}.c4{grid-column:span 4}.c5{grid-column:span 5}.c7{grid-column:span 7}.c8{grid-column:span 8}.c6{grid-column:span 6}.c12{grid-column:span 12}
+@media(max-width:900px){.c3,.c4,.c5,.c6,.c7,.c8{grid-column:span 12}}
+.lbl{color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:1px;display:flex;gap:8px;align-items:center}
+.lbl em{margin-left:auto;font-style:normal;color:var(--text)}
+.big{font-size:28px;font-weight:800;margin-top:2px}
+.up{color:var(--up)}.down{color:var(--down)}
+svg{display:block;width:100%;height:auto}
+.draw{stroke-dasharray:4000;stroke-dashoffset:4000;animation:draw 2s ease forwards}@keyframes draw{to{stroke-dashoffset:0}}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.tab{background:#12162a;border:1px solid var(--line);color:var(--mute);padding:3px 9px;border-radius:99px;font:inherit;font-size:12px;cursor:pointer}
+.tab.on{color:#fff;border-color:var(--cyan);box-shadow:0 0 10px #22e4ff55}
+.prow{padding:9px;border:1px solid var(--line);border-radius:10px;background:#090c18;margin-top:8px}
+.ptop{display:flex;justify-content:space-between;font-weight:700}
+.track{height:6px;border-radius:9px;background:#191f38;margin:9px 0 5px;position:relative}
+.mk{position:absolute;top:-4px;width:3px;height:14px;border-radius:2px}.mk.s{background:var(--down)}.mk.e{background:var(--mute)}.mk.n{background:#fff;box-shadow:0 0 10px #fff;transition:left 1s}
+.leg{display:flex;justify-content:space-between;font-size:11px;color:var(--mute)}
+.feed{display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
+.msg{padding:8px 10px;border-radius:9px;background:#090c18;border:1px solid var(--line);white-space:pre-wrap;font-size:12px;animation:in .5s ease both}
+.msg time{display:block;color:var(--neon);font-size:10.5px}
+@keyframes in{from{opacity:0;transform:translateX(-10px)}}
+.why{white-space:pre-wrap;color:#cdd3f3;font-size:12.5px}
+.empty{color:var(--mute);padding:8px 0}
+ul{margin:4px 0 0;padding-left:16px}li{margin:3px 0;font-size:12.5px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style></head><body><div class="frame">
+<header><span class="live"></span><span class="logo">CADETRADE<small>sala operativa · conto demo</small></span><span class="clock" id="clock">--:--:-- Roma</span></header>
+<div class="agents" id="agents"></div>
+<div class="floor"><div class="floorHud"><div class="status" id="status">…</div><div class="count"><div class="lbl">prossima sveglia</div><b id="count">--:--:--</b><div id="nextName" style="color:var(--mute);font-size:11px"></div></div></div>
+ <canvas id="floor" height="260"></canvas></div>
+<div class="grid">
+ <div class="p c8"><div class="lbl">Valore del conto<em id="eq">…</em></div><svg viewBox="0 0 800 190" id="eqc" preserveAspectRatio="none"></svg><div class="leg"><span id="eq0"></span><span id="dpl"></span></div></div>
+ <div class="p c4"><div class="lbl">Rischio aperto</div><div class="big" id="risk">…</div><div class="leg" style="display:block" id="riskSub"></div>
+  <div class="lbl" style="margin-top:12px">Liquidità</div><div class="big" id="cash" style="font-size:20px">…</div></div>
+ <div class="p c7"><div class="lbl">Grafico a candele<em id="csym"></em></div><div class="tabs" id="tabs"></div><svg viewBox="0 0 800 260" id="candles" preserveAspectRatio="none"></svg></div>
+ <div class="p c5"><div class="lbl">Posizioni e stop</div><div id="pos"></div></div>
+ <div class="p c6"><div class="lbl">Ultimo ragionamento di Claude<em id="runid"></em></div><div class="why" id="why">…</div><div class="lbl" style="margin-top:10px">Prossima mossa</div><div class="why" id="plan"></div></div>
+ <div class="p c6"><div class="lbl">Messaggi in diretta</div><div class="feed" id="feed"></div></div>
+ <div class="p c6"><div class="lbl">Lezioni imparate</div><ul id="lessons"></ul></div>
+ <div class="p c6"><div class="lbl">Trade chiusi</div><div id="trades"></div></div>
+</div></div>
+<script>
+const K=new URLSearchParams(location.search).get('k')||'';const $=i=>document.getElementById(i);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money=v=>v==null?'—':Number(v).toLocaleString('it-IT',{style:'currency',currency:'USD'});
+let S=null,seen=new Set(),sym='SPY',eqDrawn=-1;
+/* --- agenti: chi fa cosa --- */
+const AG=[
+ {id:'cervello',name:'CERVELLO',c:'#ffc94d',st:s=>s.phase==='pensa'?'sta ragionando…':(s.baton.brain_ok===false?'non risponde: solo stop':'Claude · pronto')},
+ {id:'notizie',name:'NOTIZIE',c:'#22e4ff',st:s=>(s.baton.news_n??'—')+' titoli letti'},
+ {id:'segnali',name:'SEGNALI',c:'#9a7bff',st:s=>(s.baton.signals_n??'—')+' titoli · EMA, RSI, ATR'},
+ {id:'fomo',name:'SCELTA FOMO',c:'#ff2fb4',st:s=>(s.baton.picks||[]).map(p=>p.symbol).join(', ')||'nessun titolo caldo'},
+ {id:'gabbia',name:'GABBIA',c:'#ff4d6d',st:s=>s.baton.halted?'BLOCCO: '+s.baton.halted:((s.baton.rejected||[]).length+' proposte respinte')},
+ {id:'ordini',name:'ORDINI',c:'#2bf0a8',st:s=>{const o=s.baton.orders||[];return o.length?o.map(x=>(x.side==='buy'?'+':'−')+x.qty+' '+x.symbol).join(' '):'nessun ordine'}},
+ {id:'guardiano',name:'GUARDIANO',c:'#5cf2ff',st:s=>Object.keys(s.stops||{}).length+' stop attivi · ogni 60s'},
+ {id:'diario',name:'DIARIO',c:'#b6ff5c',st:s=>s.trades.length+' trade · '+s.lessons.length+' lezioni'}];
+$('agents').innerHTML=AG.map(a=>`<div class="ag" id="ag-${a.id}" style="--c:${a.c}"><div class="h"><i></i>${a.name}<span id="agk-${a.id}"></span></div><div class="t" id="agt-${a.id}">…</div><div class="bar"></div></div>`).join('');
+/* --- sala operativa: stazioni e pacchetti che viaggiano --- */
+const cv=$('floor'),cx=cv.getContext('2d');let W=0,H=300,DPR=Math.min(2,devicePixelRatio||1);
+const ST={notizie:[.11,.15],segnali:[.11,.5],fomo:[.11,.85],cervello:[.4,.5],gabbia:[.63,.5],ordini:[.84,.2],broker:[.88,.62],guardiano:[.66,.88],diario:[.4,.88]};
+const LINKS=[['notizie','cervello'],['segnali','cervello'],['fomo','cervello'],['cervello','gabbia'],['gabbia','ordini'],['ordini','broker'],['guardiano','broker'],['broker','guardiano'],['ordini','diario'],['gabbia','diario']];
+const COL={notizie:'#22e4ff',segnali:'#9a7bff',fomo:'#ff2fb4',cervello:'#ffc94d',gabbia:'#ff4d6d',ordini:'#2bf0a8',broker:'#ffffff',guardiano:'#5cf2ff',diario:'#b6ff5c'};
+const LBL={notizie:'notizie',segnali:'segnali',fomo:'fomo',cervello:'Claude',gabbia:'gabbia',ordini:'ordini',broker:'Alpaca',guardiano:'guardiano',diario:'diario'};
+let packets=[],stars=[];for(let i=0;i<70;i++)stars.push([Math.random(),Math.random(),Math.random()*1.2+.2]);
+function size(){W=cv.clientWidth;H=W<600?240:260;cv.width=W*DPR;cv.height=H*DPR;cv.style.height=H+'px';cx.setTransform(DPR,0,0,DPR,0,0)}addEventListener('resize',size);size();
+const P=k=>[ST[k][0]*W,24+ST[k][1]*(H-48)];
+function spawn(a,b){packets.push({a,b,t:0,sp:.006+Math.random()*.01})}
+function rate(){if(!S)return 0;return S.phase==='pensa'?.5:S.phase==='guardia'?.15:.05}
+function frame(ts){cx.clearRect(0,0,W,H);
+ for(const s of stars){cx.fillStyle='rgba(160,170,255,'+(.15+.15*Math.sin(ts/900+s[0]*9))+')';cx.fillRect(s[0]*W,s[1]*H,s[2],s[2])}
+ cx.lineWidth=1;for(const [a,b] of LINKS){const [x1,y1]=P(a),[x2,y2]=P(b);const g=cx.createLinearGradient(x1,y1,x2,y2);g.addColorStop(0,COL[a]+'55');g.addColorStop(1,COL[b]+'55');cx.strokeStyle=g;cx.setLineDash([4,6]);cx.lineDashOffset=-ts/60;cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx.stroke()}
+ cx.setLineDash([]);
+ if(Math.random()<rate()){const flow=S&&S.phase==='guardia'?[['guardiano','broker'],['broker','guardiano']]:LINKS;const l=flow[Math.floor(Math.random()*flow.length)];spawn(l[0],l[1])}
+ packets=packets.filter(p=>{p.t+=p.sp*(S&&S.phase==='pensa'?2:1);const [x1,y1]=P(p.a),[x2,y2]=P(p.b);const x=x1+(x2-x1)*p.t,y=y1+(y2-y1)*p.t;
+  cx.fillStyle=COL[p.a];cx.shadowColor=COL[p.a];cx.shadowBlur=12;cx.beginPath();cx.arc(x,y,2.6,0,7);cx.fill();cx.shadowBlur=0;return p.t<1});
+ for(const k in ST){const [x,y]=P(k),busy=(S&&((S.phase==='pensa'&&k!=='guardiano')||(S.phase==='guardia'&&(k==='guardiano'||k==='broker'))));
+  const fs=W<600?9:11;cx.font='bold '+fs+'px ui-monospace,monospace';const tw=cx.measureText(LBL[k].toUpperCase()).width;
+  const r=k==='cervello'?Math.max(26,tw/2+12):tw/2+9,hh=k==='cervello'?20:13,pul=busy?3*Math.sin(ts/180):0;
+  cx.strokeStyle=COL[k];cx.lineWidth=2;cx.shadowColor=COL[k];cx.shadowBlur=busy?22:8;
+  cx.fillStyle='#0b0f1f';cx.beginPath();cx.roundRect(x-r-pul/2,y-hh-pul/2,2*r+pul,2*hh+pul,8);cx.fill();cx.stroke();cx.shadowBlur=0;
+  if(k==='cervello'){for(let i=0;i<3;i++){cx.strokeStyle=COL[k]+(busy?'cc':'44');cx.beginPath();cx.arc(x,y,Math.min(r,30)+10+i*7,ts/(busy?250:900)+i*2,ts/(busy?250:900)+i*2+1.6);cx.stroke()}}
+  cx.fillStyle=COL[k];cx.textAlign='center';cx.textBaseline='middle';cx.fillText(LBL[k].toUpperCase(),x,y+1)}
+ requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+/* --- grafici --- */
+function eqChart(){const pts=S.equity,el=$('eqc');if(pts.length<2){el.innerHTML='<text x="400" y="100" fill="#7d86a8" text-anchor="middle" font-size="16">la curva appare dopo le prime sveglie</text>';return}
+ if(eqDrawn===pts.length)return;eqDrawn=pts.length;const v=pts.map(p=>p.v),lo=Math.min(...v),hi=Math.max(...v),r=(hi-lo)||1,Wc=800,Hc=150;
+ const xy=pts.map((p,i)=>[i*Wc/(pts.length-1),10+Hc-(p.v-lo)/r*Hc]);const d=xy.map((q,i)=>(i?'L':'M')+q[0].toFixed(1)+' '+q[1].toFixed(1)).join(' ');
+ const up=v[v.length-1]>=v[0],c=up?'#2bf0a8':'#ff4d6d',L=xy[xy.length-1];
+ const bars=pts.map((p,i)=>{if(!i)return'';const dv=p.v-pts[i-1].v;const h=Math.min(28,Math.abs(dv)/r*60+2);return `<rect x="${xy[i][0]-1.5}" y="${190-h}" width="3" height="${h}" fill="${dv>=0?'#2bf0a8':'#ff4d6d'}" opacity=".55"/>`}).join('');
+ el.innerHTML=`<defs><linearGradient id="ef" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".35"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs>
+ <path d="${d} L800 160 L0 160 Z" fill="url(#ef)"/><path class="draw" d="${d}" fill="none" stroke="${c}" stroke-width="2.4"/>${bars}
+ <circle cx="${L[0]}" cy="${L[1]}" r="4" fill="${c}"><animate attributeName="r" values="3;8;3" dur="1.6s" repeatCount="indefinite"/></circle>`;
+ $('eq0').textContent='dal '+new Date(pts[0].t).toLocaleDateString('it-IT')}
+async function candles(){const el=$('candles');$('csym').textContent=sym+' · '+(S&&S.core[sym]||'scelto oggi');
+ let rows=[];try{rows=await (await fetch('/api/bars?s='+encodeURIComponent(sym)+'&k='+encodeURIComponent(K))).json()}catch(e){}
+ if(!rows.length){el.innerHTML='<text x="400" y="130" fill="#7d86a8" text-anchor="middle" font-size="16">dati non disponibili</text>';return}
+ const lo=Math.min(...rows.map(r=>r.l)),hi=Math.max(...rows.map(r=>r.h)),r=(hi-lo)||1,n=rows.length,w=800/n,y=v=>8+(hi-v)/r*200,vmax=Math.max(...rows.map(r=>r.v))||1;
+ let ema=rows[0].c,k=2/21,epath='';
+ el.innerHTML=rows.map((q,i)=>{ema=i?q.c*k+ema*(1-k):q.c;epath+=(i?'L':'M')+(i*w+w/2).toFixed(1)+' '+y(ema).toFixed(1);const up=q.c>=q.o,c=up?'#2bf0a8':'#ff4d6d',x=i*w+w/2;
+  return `<g style="animation:in .4s ${i*8}ms both"><line x1="${x}" x2="${x}" y1="${y(q.h)}" y2="${y(q.l)}" stroke="${c}" stroke-width="1"/><rect x="${x-w*.32}" y="${y(Math.max(q.o,q.c))}" width="${w*.64}" height="${Math.max(1,Math.abs(y(q.o)-y(q.c)))}" fill="${c}"/>
+  <rect x="${x-w*.32}" y="${260-q.v/vmax*36}" width="${w*.64}" height="${q.v/vmax*36}" fill="${c}" opacity=".3"/></g>`}).join('')
+  +`<path d="${epath}" fill="none" stroke="#ffc94d" stroke-width="1.6" opacity=".9"/><text x="796" y="${y(rows[n-1].c)-6}" fill="#fff" font-size="13" text-anchor="end">${rows[n-1].c.toFixed(2)}</text>`
+  +(S&&S.stops[sym]?`<line x1="0" x2="800" y1="${y(S.stops[sym].stop)}" y2="${y(S.stops[sym].stop)}" stroke="#ff4d6d" stroke-dasharray="6 5"/><text x="4" y="${y(S.stops[sym].stop)-4}" fill="#ff4d6d" font-size="12">stop ${S.stops[sym].stop.toFixed(2)}</text>`:'')}
+function tabs(){const list=[...Object.keys(S.core),...(S.baton.picks||[]).map(p=>p.symbol)];$('tabs').innerHTML=list.map(s=>`<button class="tab ${s===sym?'on':''}" data-s="${esc(s)}">${esc(s)}</button>`).join('');
+ $('tabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{sym=b.dataset.s;tabs();candles()})}
+/* --- tutto il resto --- */
+function render(){const b=S.broker||{},a=b.account||{},pos=b.positions||{},bt=S.baton||{};
+ for(const g of AG){const on=(S.phase==='pensa'&&g.id!=='guardiano')||(S.phase!=='pensa'&&g.id==='guardiano');$('ag-'+g.id).classList.toggle('on',on);$('agt-'+g.id).textContent=g.st(S);$('agk-'+g.id).textContent=on?'attivo':''}
+ $('status').innerHTML={pensa:`<b>Sveglia ${esc(S.run)}</b> · Claude legge mercato e notizie e propone; la gabbia decide`,guardia:`<b>Guardiano</b> · controlla e sposta gli stop`,attesa:`<b>In attesa</b> · il guardiano veglia sugli stop ogni minuto`}[S.phase];
+ $('nextName').textContent=S.next.name;$('eq').textContent=money(a.equity);$('cash').textContent=money(a.cash);
+ const dpl=a.equity!=null&&a.last_equity?a.equity-a.last_equity:null;$('dpl').innerHTML=dpl==null?'':`<span class="${dpl>=0?'up':'down'}">${dpl>=0?'▲':'▼'} ${money(Math.abs(dpl))} oggi</span>`;
+ let risk=0;for(const [s,p] of Object.entries(pos)){const r=S.stops[s];if(r)risk+=Math.max(0,(p.price-r.stop)*p.qty)}
+ $('risk').textContent=a.equity?(risk/a.equity*100).toFixed(2)+'%':'—';$('riskSub').innerHTML=`perdita se scattassero tutti gli stop · tetto 4%<br>massimo storico ${money(S.peak)}`+(b.ok===false?'<br><span class="down">broker non raggiungibile</span>':'')+(S.brain_failures?`<br><span class="down">Claude non risponde da ${S.brain_failures} sveglie</span>`:'');
+ eqChart();
+ const keys=Object.keys(pos);$('pos').innerHTML=keys.length?keys.map(s=>{const p=pos[s],r=S.stops[s]||{};const lo=Math.min(r.stop??p.price,p.price)*.995,hi=Math.max(r.high??p.price,p.price,p.avg_entry)*1.005,at=x=>((x-lo)/(hi-lo)*100).toFixed(1)+'%',pl=p.plpc*100;
+  return `<div class="prow"><div class="ptop"><span>${esc(s)}</span><span class="${pl>=0?'up':'down'}">${pl>=0?'+':''}${pl.toFixed(2)}%</span></div><div class="track">${r.stop?`<div class="mk s" style="left:${at(r.stop)}"></div>`:''}<div class="mk e" style="left:${at(p.avg_entry)}"></div><div class="mk n" style="left:${at(p.price)}"></div></div>
+  <div class="leg"><span>stop ${r.stop?r.stop.toFixed(2):'—'}${r.stop>=r.entry?' 🔒':''}</span><span>${p.avg_entry.toFixed(2)} → ${p.price.toFixed(2)}</span></div></div>`}).join(''):'<div class="empty">Nessuna posizione: tutto in liquidità.</div>';
+ $('why').textContent=bt.reasoning||'Ancora nessuna decisione.';$('plan').textContent=bt.planNext||'';$('runid').textContent=bt.run_id||'';
+ const f=$('feed');if(f.firstChild&&f.firstChild.className==='empty'&&S.feed.length)f.innerHTML='';
+ for(const m of S.feed){const id=m.t+m.text.slice(0,40);if(seen.has(id))continue;seen.add(id);const d=document.createElement('div');d.className='msg';d.innerHTML=`<time>${new Date(m.t).toLocaleTimeString('it-IT')}</time>${esc(m.text)}`;f.prepend(d)}
+ if(!f.children.length)f.innerHTML='<div class="empty">I messaggi del bot compaiono qui man mano.</div>';
+ $('lessons').innerHTML=(S.lessons.length?S.lessons:['Le prime lezioni arrivano con il resoconto della domenica.']).map(l=>`<li>${esc(l)}</li>`).join('');
+ $('trades').innerHTML=S.trades.length?S.trades.slice().reverse().map(t=>`<div class="leg" style="padding:4px 0;font-size:12.5px"><span>${esc(t.symbol)} ${t.stop?'· stop':''}</span><span class="${t['pnl_%']>=0?'up':'down'}">${t['pnl_%']>=0?'+':''}${t['pnl_%']}% · ${money(t.pnl_usd)}</span></div>`).join(''):'<div class="empty">Nessun trade chiuso ancora.</div>';
+}
+function tick(){$('clock').textContent=new Date().toLocaleTimeString('it-IT',{timeZone:'Europe/Rome'})+' Roma';if(!S)return;const ms=new Date(S.next.at)-Date.now();
+ if(ms<=0){$('count').textContent='ora';return}const h=Math.floor(ms/36e5),m=Math.floor(ms%36e5/6e4),s=Math.floor(ms%6e4/1e3);$('count').textContent=[h,m,s].map(x=>String(x).padStart(2,'0')).join(':')}
+let first=true,prevPhase='';
+async function load(){try{const r=await fetch('/api/state?k='+encodeURIComponent(K),{cache:'no-store'});if(!r.ok)throw 0;S=await r.json();render();
+ if(first){first=false;tabs();candles()}if(prevPhase==='pensa'&&S.phase!=='pensa'){eqDrawn=-1;candles()}prevPhase=S.phase}catch(e){$('status').innerHTML='<b>riconnessione…</b>'}}
+load();setInterval(load,4000);setInterval(tick,1000);
+</script></body></html>

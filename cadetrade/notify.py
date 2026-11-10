@@ -2,6 +2,8 @@
 import json
 import logging
 import urllib.request
+from collections import deque
+from datetime import datetime, timezone
 
 log = logging.getLogger("telegram")
 
@@ -10,6 +12,7 @@ class Notifier:
     def __init__(self, token: str = "", chat_id: str = ""):
         self.token, self.chat_id = token, chat_id
         self.sent: list[str] = []   # utile nei test e in console
+        self.feed = deque(maxlen=60)  # (ora, testo) per il pannello dal vivo
 
     def _resolve_chat_id(self) -> str:
         """Senza chat id lo ricava dall'ultimo messaggio scritto al bot (basta avergli scritto "ciao")."""
@@ -28,6 +31,7 @@ class Notifier:
 
     def send(self, text: str) -> None:
         self.sent.append(text)
+        self.feed.append((datetime.now(timezone.utc).isoformat(), text))
         if self.token and not self.chat_id:
             self._resolve_chat_id()
         if not (self.token and self.chat_id):

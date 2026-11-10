@@ -86,6 +86,9 @@ def main(argv=None):
         setup_logging(secrets, LOGS / "schedule.log")
         ctx = build_ctx(a, secrets)
         log = logging.getLogger("schedule")
+        from . import dashboard
+        import os as _os
+        dashboard.start(ctx, _os.environ.get("DASHBOARD_KEY", ""), int(_os.environ.get("DASHBOARD_PORT", "8080")))
         msg = f"Sempre acceso. Prossima sveglia {next_slot(now()):%Y-%m-%d %H:%M}. Guardiano stop ogni {CAGE.guard_interval_s}s."
         log.info(msg)
         brain_on = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"))
