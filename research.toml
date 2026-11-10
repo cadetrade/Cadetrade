@@ -1,0 +1,24 @@
+# Configurazione della ricerca/backtest (strategia a regole). Non usata dall agente.
+
+[exchange]
+id = "binance"            # qualsiasi exchange supportato da ccxt (binance, kraken, bybit, ...)
+symbol = "BTC/USDT"
+timeframe = "1h"
+# Le chiavi API si leggono SOLO da variabili d'ambiente: CADETRADE_API_KEY / CADETRADE_API_SECRET
+
+[strategy]
+name = "ema_cross"
+fast = 20
+slow = 50
+trend = 200               # filtro di trend: compra solo sopra la EMA200
+atr_period = 14
+stop_atr = 2.0            # stop loss = 2 x ATR sotto l'ingresso
+take_atr = 4.0            # take profit = 4 x ATR sopra l'ingresso
+
+[risk]
+starting_equity = 1000.0  # capitale simulato in paper / backtest (USDT)
+risk_per_trade = 0.01     # rischia l'1% del capitale per trade
+max_position_pct = 0.25   # una posizione non supera il 25% del capitale
+max_daily_loss = 0.03     # stop della giornata a -3%
+max_drawdown = 0.15       # kill switch a -15% dal massimo
+fee_rate = 0.001          # 0.1% per lato

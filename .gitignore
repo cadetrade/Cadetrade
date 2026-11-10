@@ -1,0 +1,6 @@
+secrets.toml
+state/
+logs/
+__pycache__/
+.pytest_cache/
+*.log

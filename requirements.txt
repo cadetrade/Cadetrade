@@ -1,0 +1,5 @@
+pandas>=2.0
+numpy>=1.26
+pytest>=8.0
+anthropic>=1.0     # solo per --brain api
+ccxt>=4.3          # solo per cadetrade.research (backtest su exchange crypto)
