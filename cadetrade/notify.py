@@ -33,6 +33,7 @@ class Notifier:
         if not (self.token and self.chat_id):
             log.info("[console] %s", text.replace("\n", " | "))
             return
+        log.info("%s", text.replace("\n", " | ")[:600])   # copia nel log: si legge anche dal pannello Hostinger
         body = json.dumps({"chat_id": self.chat_id, "text": text[:4000], "disable_web_page_preview": True}).encode()
         req = urllib.request.Request(f"https://api.telegram.org/bot{self.token}/sendMessage", data=body,
                                      headers={"Content-Type": "application/json"})
