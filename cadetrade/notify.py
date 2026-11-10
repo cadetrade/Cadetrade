@@ -11,8 +11,25 @@ class Notifier:
         self.token, self.chat_id = token, chat_id
         self.sent: list[str] = []   # utile nei test e in console
 
+    def _resolve_chat_id(self) -> str:
+        """Senza chat id lo ricava dall'ultimo messaggio scritto al bot (basta avergli scritto "ciao")."""
+        try:
+            with urllib.request.urlopen(f"https://api.telegram.org/bot{self.token}/getUpdates", timeout=10) as r:
+                updates = json.loads(r.read()).get("result", [])
+            for u in reversed(updates):
+                chat = (u.get("message") or u.get("my_chat_member") or {}).get("chat", {})
+                if chat.get("id"):
+                    self.chat_id = str(chat["id"])
+                    log.info("chat id Telegram trovato: %s", self.chat_id)
+                    break
+        except Exception as e:
+            log.error("chat id Telegram non trovato (%s): scrivi 'ciao' al bot", type(e).__name__)
+        return self.chat_id
+
     def send(self, text: str) -> None:
         self.sent.append(text)
+        if self.token and not self.chat_id:
+            self._resolve_chat_id()
         if not (self.token and self.chat_id):
             log.info("[console] %s", text.replace("\n", " | "))
             return

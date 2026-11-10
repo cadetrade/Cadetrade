@@ -185,3 +185,19 @@ def test_secrets_masked_in_logs(caplog):
     with caplog.at_level(logging.INFO):
         lg.info("chiave %s", "supersecret123")
     assert "supersecret123" not in caplog.text and "***" in caplog.text
+
+
+def test_notifier_finds_chat_id(monkeypatch):
+    import io
+    from cadetrade.notify import Notifier
+    calls = []
+
+    def fake_urlopen(req, timeout=10):
+        url = req if isinstance(req, str) else req.full_url
+        calls.append(url)
+        body = b'{"ok":true,"result":[{"message":{"chat":{"id":424242}}}]}' if "getUpdates" in url else b'{"ok":true}'
+        return io.BytesIO(body)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    n = Notifier("123:abc", "")
+    n.send("ciao")
+    assert n.chat_id == "424242" and "sendMessage" in calls[-1]
