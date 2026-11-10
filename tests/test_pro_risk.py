@@ -127,3 +127,51 @@ def test_big_tech_have_lower_cap_and_share_the_tech_group():
                prices={"NVDA": 180, **{s: 10_000 for s in pos}}, stock_market_open=True, peak_equity=100_000,
                stopped_today=set(), atr={"NVDA": 2.0})
     assert "tecnologia USA" in v.rejected[0]["reason"]             # 40% + 10,8% > 50%
+
+
+def test_trend_filter_blocks_buys_below_ema50():
+    v = review([{"symbol": "QQQ", "side": "buy", "qty": 5, "why": "x"}], slot_hhmm="1540", account=ACC, positions={},
+               prices={"QQQ": 520}, stock_market_open=True, peak_equity=100_000, stopped_today=set(), trend={"QQQ": False})
+    assert "media a 50 giorni" in v.rejected[0]["reason"]
+
+
+def test_total_open_risk_is_capped():
+    # già aperte: 4 posizioni con 900 $ di rischio ciascuna = 3.600 $; spazio rimasto 400 $
+    pos = {s: {"qty": 100, "avg_entry": 100, "price": 100, "market_value": 10_000, "plpc": 0.0} for s in ("GLD", "MSFT", "AAPL", "AMZN")}
+    stops = {s: {"entry": 100, "stop": 91, "initial_stop": 91, "atr": 4.5, "high": 100} for s in pos}
+    acc = {"equity": 100_000.0, "cash": 60_000.0, "last_equity": 100_000.0}
+    v = review([{"symbol": "SPY", "side": "buy", "qty": 30, "why": "x"}], slot_hhmm="1540", account=acc, positions=pos,
+               prices={"SPY": 600, **{s: 100 for s in pos}}, stock_market_open=True, peak_equity=100_000,
+               stopped_today=set(), stops=stops, atr={"SPY": 6.0})
+    assert v.accepted[0]["qty"] == 33 or v.accepted[0]["qty"] == 30
+    assert (600 - v.accepted[0]["stop"]) * v.accepted[0]["qty"] <= 400 + 1e-6
+
+
+def test_spike_day_pick_is_watched_then_buyable(tmp_path):
+    from datetime import timedelta
+    from conftest import DAY
+    ctx = make_ctx(tmp_path / "s", brain({"symbol": "PLTR", "side": "buy", "qty": 5, "why": "fomo"}))
+    ctx.broker.set(hot={"PLTR": [4.0, 0.12]})
+    baton = run_wakeup(ctx, "1540", at("1540"))            # PLTR +12% oggi: giorno dell'esplosione, si osserva
+    assert any(r["symbol"] == "PLTR" and "esplosione" in r["reason"] for r in baton["rejected"])
+    ctx.broker.set(hot={}, screener=[])                     # il giorno dopo non è più caldo, ma resta in osservazione
+    baton = run_wakeup(ctx, "1540", at("1540", DAY + timedelta(days=1)))
+    assert [o["symbol"] for o in baton["orders"]] == ["PLTR"]
+
+
+def test_alarm_after_three_brain_failures(tmp_path):
+    ctx = make_ctx(tmp_path / "s", FakeBrain("niente json"))
+    for hhmm in ("1300", "1540", "1830"):
+        run_wakeup(ctx, hhmm, at(hhmm))
+    assert any("da 3 sveglie" in m for m in ctx.notifier.sent)
+
+
+def test_review_compares_with_buy_and_hold(tmp_path):
+    from cadetrade.learning import Journal
+    j = Journal(tmp_path)
+    j.mark(at("1540"), 100_000, 600, {"SPY": 600, "GLD": 300})
+    j.mark(at("1830"), 95_000, 600, {"SPY": 600, "GLD": 300})
+    j.mark(at("2140"), 101_000, 606, {"SPY": 606, "GLD": 303})
+    perf = j.performance(at("0900"))
+    assert perf["compra_e_tieni_spy_%"] == 1.0 and perf["compra_e_tieni_nucleo_%"] == 1.0
+    assert perf["peggior_calo_%"] == -5.0

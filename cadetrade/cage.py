@@ -15,11 +15,16 @@ class Verdict:
 
 def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: dict, prices: dict,
            stock_market_open: bool, peak_equity: float, stopped_today: set, picks: set = frozenset(),
-           stops: dict | None = None, atr: dict | None = None, cage: Cage = CAGE) -> Verdict:
+           stops: dict | None = None, atr: dict | None = None, trend: dict | None = None,
+           pick_blocked: dict | None = None, cage: Cage = CAGE) -> Verdict:
     """picks = i titoli scelti oggi dal codice: si possono comprare, con un peso massimo più basso.
     Le posizioni aperte in giorni precedenti si possono sempre vendere.
     stops = gli stop di ogni posizione (stops.py); atr = volatilità in $ per titolo, per lo stop e la quantità."""
-    atr = atr or {}
+    atr, trend, pick_blocked = atr or {}, trend or {}, pick_blocked or {}
+    records = stops or {}
+    # rischio già aperto: quanto si perderebbe se scattassero tutti gli stop adesso
+    open_risk = sum(max(0.0, (p["price"] - records[s]["stop"]) * p["qty"])
+                    for s, p in positions.items() if s in records and p["qty"] > 0)
     v = Verdict()
     buyable = set(UNIVERSE) | set(picks)
     slot = SLOT_BY_HHMM[slot_hhmm]
@@ -87,6 +92,10 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
             reject(o, f"sveglia {slot.name}: si entra solo all'apertura (15:40) e alla chiusura (21:40)"); continue
         if v.halted:
             reject(o, v.halted); continue
+        if sym in pick_blocked:
+            reject(o, pick_blocked[sym]); continue
+        if cage.trend_filter and trend.get(sym) is False:
+            reject(o, "sotto la media a 50 giorni: niente acquisti contro il trend"); continue
         if sym in stopped_today:
             reject(o, "chiuso dallo stop oggi: niente riacquisto fino a domani"); continue
         # la quantità la decide il rischio: se scatta lo stop si perde al massimo lo 0,75% del conto (0,4% sui scelti)
@@ -96,6 +105,13 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
         max_qty = equity * risk_pct / (price - stop_px)
         if not is_crypto(sym):
             max_qty = math.floor(max_qty)
+        room = equity * cage.max_open_risk - open_risk   # tetto al rischio totale aperto
+        if room / (price - stop_px) < max_qty:
+            max_qty = room / (price - stop_px)
+            if not is_crypto(sym):
+                max_qty = math.floor(max_qty)
+            if max_qty <= 0:
+                reject(o, f"rischio totale aperto già al {cage.max_open_risk*100:g}% del conto"); continue
         sized = ""
         if qty > max_qty + 1e-9:
             if max_qty < (1 if not is_crypto(sym) else 1e-6):
@@ -130,6 +146,7 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
         if notional > cash:
             reject(o, "liquidità insufficiente: niente leva"); continue
         cash -= notional
+        open_risk += (price - stop_px) * qty
         held[sym] = held.get(sym, 0.0) + qty
         value[sym] = value.get(sym, 0.0) + notional
         v.accepted.append({**o, "qty": qty, "forced": False, "stop": stop_px, "atr": atr.get(sym),

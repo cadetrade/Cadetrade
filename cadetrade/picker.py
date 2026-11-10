@@ -64,25 +64,70 @@ def pick(broker, rules: PickRules = PICKS) -> list[dict]:
 
 
 class PickStore:
+    """Le scelte degli ultimi giorni: un titolo scelto resta in osservazione (e comprabile) per PICKS.watch_days giorni."""
+
     def __init__(self, state_dir: Path):
         self.path = state_dir / "picks.json"
+        self.log = state_dir / "picks_log.jsonl"
 
-    def today(self, day: datetime) -> list[dict] | None:
+    def _load(self) -> dict:
         try:
             d = json.loads(self.path.read_text())
         except (OSError, ValueError):
-            return None
-        return d.get("picks") if d.get("date") == f"{day:%Y-%m-%d}" else None
+            return {}
+        if "days" not in d and d.get("date"):   # formato vecchio
+            d = {"days": {d["date"]: d.get("picks", [])}}
+        return d.get("days", {}) if isinstance(d, dict) else {}
 
-    def save(self, day: datetime, picks: list[dict]) -> None:
-        _atomic_write(self.path, {"date": f"{day:%Y-%m-%d}", "picks": picks})
+    def today(self, day: datetime) -> list[dict] | None:
+        return self._load().get(f"{day:%Y-%m-%d}")
+
+    def recent(self, day: datetime, n: int) -> dict:
+        days = self._load()
+        keep = sorted(d for d in days if d <= f"{day:%Y-%m-%d}")[-n:]
+        return {d: days[d] for d in keep}
+
+    def save(self, day: datetime, picks: list[dict], n: int = PICKS.watch_days) -> None:
+        days = self._load()
+        days[f"{day:%Y-%m-%d}"] = picks
+        keep = sorted(days)[-n:]
+        _atomic_write(self.path, {"days": {d: days[d] for d in keep}})
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        with self.log.open("a", encoding="utf-8") as f:   # per misurare se la scelta funziona, anche senza comprare
+            for p in picks:
+                f.write(json.dumps({"date": f"{day:%Y-%m-%d}", "symbol": p["symbol"], "price": p["price"],
+                                    "var_1g_%": p.get("var_1g_%")}) + "\n")
+
+    def history(self) -> list[dict]:
+        rows = []
+        try:
+            for line in self.log.read_text().splitlines():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+        except OSError:
+            pass
+        return rows
 
 
-def picks_for_today(broker, state_dir: Path, day: datetime) -> list[dict]:
-    """Una scelta al giorno, alla prima sveglia: per tutto il giorno i candidati restano gli stessi."""
+def picks_for_today(broker, state_dir: Path, day: datetime, rules: PickRules = PICKS) -> list[dict]:
+    """Una scelta al giorno, alla prima sveglia, più quelle dei giorni precedenti ancora in osservazione."""
     store = PickStore(state_dir)
-    got = store.today(day)
-    if got is None:
-        got = pick(broker)
-        store.save(day, got)
-    return got
+    if store.today(day) is None:
+        store.save(day, pick(broker, rules), rules.watch_days)
+    today = f"{day:%Y-%m-%d}"
+    out, seen = [], set()
+    for d, picks in sorted(store.recent(day, rules.watch_days).items(), reverse=True):
+        for p in picks:
+            if p["symbol"] in seen:
+                continue
+            seen.add(p["symbol"])
+            out.append({**p, "giorno_scelta": d, "nuovo_oggi": d == today})
+    return out
+
+
+def blocked_today(picks: list[dict], rules: PickRules = PICKS) -> dict:
+    """Nel giorno dell'esplosione non si compra: si aspetta il ritracciamento nei giorni dopo."""
+    return {p["symbol"]: f"giorno dell'esplosione ({p['var_1g_%']:+.1f}%): si osserva, comprabile nei prossimi giorni"
+            for p in picks if p.get("nuovo_oggi") and (p.get("var_1g_%") or 0) > rules.spike_1d * 100}

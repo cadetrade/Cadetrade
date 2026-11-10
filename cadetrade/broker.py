@@ -135,11 +135,25 @@ class AlpacaPaper:
             r = self._req("GET", f"{DATA_URL}/v2/stocks/trades/latest?symbols={symbol}&feed=iex")
         return float(r["trades"][symbol]["p"])
 
+    sip_ok = True   # il piano gratuito dà i dati SIP (tutte le borse USA) con 15 minuti di ritardo
+
     def daily_bars(self, symbol: str, days: int = 300) -> pd.DataFrame:
-        start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+        now_utc = datetime.now(timezone.utc)
+        start = (now_utc - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
         q = urllib.parse.urlencode({"symbols": symbol, "timeframe": "1Day", "start": start, "limit": 10000})
-        url = f"{DATA_URL}/v1beta3/crypto/us/bars?{q}" if is_crypto(symbol) else f"{DATA_URL}/v2/stocks/bars?{q}&feed=iex"
-        bars = (self._req("GET", url) or {}).get("bars", {}).get(symbol, [])
+        if is_crypto(symbol):
+            bars = (self._req("GET", f"{DATA_URL}/v1beta3/crypto/us/bars?{q}") or {}).get("bars", {}).get(symbol, [])
+        else:
+            bars = None
+            if AlpacaPaper.sip_ok:
+                end = (now_utc - timedelta(minutes=16)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                try:
+                    bars = (self._req("GET", f"{DATA_URL}/v2/stocks/bars?{q}&feed=sip&end={end}") or {}).get("bars", {}).get(symbol, [])
+                except BrokerRejected as e:
+                    log.warning("dati SIP non disponibili (%s): uso IEX", e)
+                    AlpacaPaper.sip_ok = False
+            if bars is None:
+                bars = (self._req("GET", f"{DATA_URL}/v2/stocks/bars?{q}&feed=iex") or {}).get("bars", {}).get(symbol, [])
         df = pd.DataFrame(bars).rename(columns={"t": "ts", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
         if df.empty:
             return df

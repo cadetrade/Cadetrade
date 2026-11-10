@@ -34,6 +34,10 @@ le ultime notizie sui titoli seguiti e la sveglia attuale. Decidi se comprare, v
 Regole che il codice applica comunque, qualunque cosa tu proponga (proporre ordini fuori regola è inutile):
 - nucleo fisso {', '.join(f'{k} ({v})' for k, v in CORE.items())}, più i 1-2 titoli "scelti oggi" che trovi nel contesto
   (selezionati dal codice per volumi anomali e slancio: sono i più rischiosi);
+- niente acquisti sotto la media a 50 giorni (indicatore sopra_ema50 = false): il codice li rifiuta;
+- i titoli scelti nel giorno dell'esplosione (oltre +8%, vedi "scelti_bloccati_oggi") non si comprano: restano in osservazione
+  per 3 giorni e si possono comprare se ritracciano;
+- la somma delle perdite se scattassero TUTTI gli stop non supera il 4% del conto: oltre, il codice riduce o rifiuta gli acquisti;
 - si ENTRA (compra) solo nelle sveglie "apertura" e "chiusura" (campo sveglia.si_puo_entrare); nelle altre puoi solo vendere;
 - ogni acquisto ha uno stop: indica nel campo "stop" il prezzo a cui la tua idea è sbagliata (sotto un minimo, sotto la EMA...).
   Il codice lo tiene tra {CAGE.min_stop_atr:g} e {CAGE.max_stop_atr:g} ATR dal prezzo; se non lo dai usa {CAGE.stop_atr:g} ATR;
@@ -53,7 +57,8 @@ Regole che il codice applica comunque, qualunque cosa tu proponga (proporre ordi
 Metodo: entra a favore del trend (sopra la EMA50, meglio anche sopra la EMA200) e su ritracciamenti, non sui massimi.
 Le notizie servono a capire il contesto e i rischi (dati macro, Fed, risultati trimestrali): non comprare un titolo il giorno
 prima dei suoi risultati, e una notizia da sola non è un motivo per entrare. La liquidità è una posizione legittima.
-Il tuo obiettivo non è fare tanti trade ma battere nel tempo un benchmark semplice (SPY) senza violare regole.
+Il tuo obiettivo non è fare tanti trade ma battere nel tempo due benchmark semplici: comprare SPY e tenerlo, e comprare il nucleo
+in parti uguali e tenerlo. Se non li batti, il bot non serve.
 Nel contesto trovi le "lezioni_imparate" dalle tue pagelle settimanali e l'"esperimento_in_corso": seguile, a meno che
 i dati di oggi non le smentiscano chiaramente (in quel caso scrivilo nel reasoning). I titoli scelti oggi sono un'opzione,
 non un obbligo: la fomo del mercato non è una buona ragione da sola.
@@ -126,11 +131,12 @@ Ricevi: il diario dei trade chiusi (con la tesi scritta all'acquisto e come è f
 i rifiuti della gabbia, le lezioni attuali e l'esperimento della settimana passata con i suoi risultati.
 
 Fai tre cose, con onestà e senza consolarti:
-1. summary: risultato contro SPY, l'errore principale della settimana e cosa ha funzionato (4-6 frasi). Distingui la sfortuna
+1. summary: risultato contro "compra e tieni SPY" e "compra e tieni il nucleo", peggior calo, l'errore principale della settimana e cosa ha funzionato (4-6 frasi). Distingui la sfortuna
    dall'errore di metodo: un trade in perdita con una tesi buona e lo stop rispettato non è un errore.
 2. lessons: la lista COMPLETA e aggiornata delle lezioni (massimo 8, frasi brevi e operative, es. "sui titoli scelti per fomo
    entra solo dopo un ritracciamento sotto la EMA20"). Tieni quelle confermate dai dati, togli quelle smentite, aggiungi
    le nuove solo se hanno almeno due trade a sostegno. Con pochi trade, cambia poco: non inseguire il rumore.
+   Guarda "titoli_scelti_come_sono_andati": se in media vanno male, scrivilo e diventa più selettivo sui titoli scelti.
 3. experiment: UN nuovo approccio da provare la settimana prossima, con il criterio per giudicarlo alla pagella successiva.
 grade: voto da 1 a 10 sulla disciplina e sul metodo, non sul guadagno.
 Le regole della gabbia (pesi, stop, limiti) non si cambiano da qui: puoi solo cambiare come scegli e quando entri ed esci.

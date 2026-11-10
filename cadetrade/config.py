@@ -87,6 +87,8 @@ class Cage:
     # proteggere i guadagni: dopo +1R lo stop sale a pareggio e poi segue il prezzo a 2,5 ATR dal massimo
     breakeven_r: float = 1.0
     trail_atr: float = 2.5
+    max_open_risk: float = 0.04       # somma delle perdite se scattassero TUTTI gli stop: max 4% del conto
+    trend_filter: bool = True         # niente acquisti sotto la media a 50 giorni
     daily_loss_halt: float = -0.03    # P&L del giorno sotto -3%: niente acquisti nuovi fino a domani
     max_drawdown: float = -0.15       # dal massimo storico del conto: solo vendite, serve un umano
     max_orders_per_run: int = 6
@@ -105,6 +107,8 @@ class PickRules:
     min_dollar_volume: float = 50_000_000      # liquidità minima giornaliera in $ (azioni)
     min_volume_ratio: float = 1.5              # volume di oggi / media 20 giorni
     max_change_1d: float = 0.25                # oltre +25% in un giorno è una scommessa, non un trend
+    spike_1d: float = 0.08                     # oltre +8%: il giorno dell'esplosione non si compra, si osserva
+    watch_days: int = 3                        # un titolo scelto resta in osservazione (comprabile) per 3 giorni
     # ETF a leva o inversi: vietati anche se sono i più scambiati
     banned: tuple = ("TQQQ", "SQQQ", "SOXL", "SOXS", "SPXL", "SPXS", "UPRO", "SPXU", "TNA", "TZA", "LABU",
                      "LABD", "UVXY", "SVXY", "VXX", "NVDL", "TSLL", "TSLQ", "MSTU", "MSTZ", "BITX", "CONL", "NUGT", "DUST")

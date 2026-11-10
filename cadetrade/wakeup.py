@@ -15,7 +15,7 @@ from .stops import forced_stops, new_record, sync_records
 from .clock import missed_between, name_of, next_slot, now, run_id
 from .config import CAGE, SLOT_BY_HHMM, UNIVERSE, is_crypto
 from .learning import Journal, run_review
-from .picker import picks_for_today
+from .picker import blocked_today, picks_for_today
 from .lock import Busy, RunLock
 
 log = logging.getLogger("sveglia")
@@ -272,6 +272,7 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
             "ordini_ultime_48h": recent[:30],
             "indicatori": sig,
             "scelti_oggi": picks,
+            "scelti_bloccati_oggi": blocked_today(picks),
             "lezioni_imparate": learned.get("lessons", []),
             "esperimento_in_corso": learned.get("experiment"),
             "chiusi_dallo_stop_oggi": sorted(stopped),
@@ -285,6 +286,11 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
             decision = {"orders": [], "reasoning": "Cervello non disponibile: applico solo lo stop loss.",
                         "planNext": (last or {}).get("planNext", "")}
             n.alarm(f"Cervello non disponibile ({e}): applico solo lo stop loss.", rid)
+        fails = 0 if brain_ok else int(risk.get("brain_failures", 0)) + 1
+        risk["brain_failures"] = fails
+        if fails == 3 or (fails > 3 and fails % 7 == 0):
+            n.alarm("🚨 Claude non risponde da " + str(fails) + " sveglie di fila: il bot fa solo gli stop. "
+                    "Controlla il token di Claude o i limiti del piano Pro.", rid)
 
         prices = {s: p["price"] for s, p in positions.items()}
         prices.update({s: v["prezzo"] for s, v in sig.items() if s not in prices})
@@ -297,7 +303,9 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
                     pass
         verdict = review(decision["orders"], slot_hhmm=hhmm, account=account, positions=positions, prices=prices,
                          stock_market_open=clock["is_open"], peak_equity=peak, stopped_today=stopped, picks=pick_syms,
-                         stops=records, atr={k: v["atr14"] for k, v in sig.items() if v.get("atr14")})
+                         stops=records, atr={k: v["atr14"] for k, v in sig.items() if v.get("atr14")},
+                         trend={k: v["sopra_ema50"] for k, v in sig.items() if "sopra_ema50" in v},
+                         pick_blocked=blocked_today(picks))
 
         results = []
         for o in verdict.accepted:
@@ -335,7 +343,7 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
                 spy = b.latest_price("SPY")
             except Exception:
                 spy = None
-        journal.mark(t, account_after["equity"], spy)
+        journal.mark(t, account_after["equity"], spy, {s: prices.get(s) for s in UNIVERSE if prices.get(s)})
 
         day_pl = account_after["equity"] - account_after["last_equity"]
         baton = {

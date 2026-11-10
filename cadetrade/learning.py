@@ -87,10 +87,10 @@ class Journal:
         return rows
 
     # --- curva del conto contro SPY ---
-    def mark(self, t: datetime, equity: float, spy: float | None) -> None:
+    def mark(self, t: datetime, equity: float, spy: float | None, core: dict | None = None) -> None:
         self.equity.parent.mkdir(parents=True, exist_ok=True)
         with self.equity.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": t.isoformat(), "equity": equity, "spy": spy}) + "\n")
+            f.write(json.dumps({"ts": t.isoformat(), "equity": equity, "spy": spy, "core": core or {}}) + "\n")
 
     def performance(self, since: datetime) -> dict:
         pts = []
@@ -109,8 +109,17 @@ class Journal:
         a, b = pts[0], pts[-1]
         out = {"conto_%": round((b["equity"] / a["equity"] - 1) * 100, 2)}
         if a.get("spy") and b.get("spy"):
-            out["spy_%"] = round((b["spy"] / a["spy"] - 1) * 100, 2)
-            out["differenza_vs_spy_%"] = round(out["conto_%"] - out["spy_%"], 2)
+            out["compra_e_tieni_spy_%"] = round((b["spy"] / a["spy"] - 1) * 100, 2)
+            out["differenza_vs_spy_%"] = round(out["conto_%"] - out["compra_e_tieni_spy_%"], 2)
+        ca, cb = a.get("core") or {}, b.get("core") or {}
+        common = [s for s in ca if s in cb and ca[s] and cb[s]]
+        if common:   # il nucleo comprato in parti uguali e tenuto fermo
+            out["compra_e_tieni_nucleo_%"] = round(sum(cb[s] / ca[s] - 1 for s in common) / len(common) * 100, 2)
+        peak, dd = 0.0, 0.0
+        for p in pts:
+            peak = max(peak, p["equity"])
+            dd = min(dd, p["equity"] / peak - 1)
+        out["peggior_calo_%"] = round(dd * 100, 2)
         return out
 
     # --- lezioni ---
@@ -127,6 +136,7 @@ class Journal:
 def stats(trades: list[dict]) -> dict:
     if not trades:
         return {"trade_chiusi": 0}
+    pnl = [t["pnl_%"] for t in trades]
     wins = [t for t in trades if t["pnl_usd"] > 0]
     losses = [t for t in trades if t["pnl_usd"] <= 0]
     by_kind = {}
@@ -140,6 +150,7 @@ def stats(trades: list[dict]) -> dict:
         "guadagno_medio_%": round(sum(t["pnl_%"] for t in wins) / len(wins), 2) if wins else 0.0,
         "perdita_media_%": round(sum(t["pnl_%"] for t in losses) / len(losses), 2) if losses else 0.0,
         "pnl_totale_usd": round(sum(t["pnl_usd"] for t in trades), 2),
+        "media_per_trade_%": round(sum(pnl) / len(pnl), 2),   # aspettativa: deve essere sopra zero
         "chiusi_dallo_stop": sum(1 for t in trades if t["stop"]),
         "per_tipo": by_kind,
     }
@@ -161,6 +172,22 @@ def cage_rejections(state_dir: Path, since: datetime) -> dict:
     return counts
 
 
+def pick_outcomes(ctx, since: datetime) -> dict:
+    """I titoli scelti per fomo, comprati o no: quanto hanno fatto da quando sono stati scelti. Dice se la scelta funziona."""
+    from .picker import PickStore
+    rows = [r for r in PickStore(ctx.state_dir).history() if r["date"] >= f"{since:%Y-%m-%d}" and r.get("price")]
+    out = []
+    for r in rows[-30:]:
+        try:
+            now_px = ctx.broker.latest_price(r["symbol"])
+        except Exception:
+            continue
+        out.append({"data": r["date"], "titolo": r["symbol"], "da_allora_%": round((now_px / r["price"] - 1) * 100, 2)})
+    if not out:
+        return {}
+    return {"media_%": round(sum(o["da_allora_%"] for o in out) / len(out), 2), "dettaglio": out}
+
+
 def run_review(ctx, t: datetime, days: int = 7) -> dict | None:
     j = Journal(ctx.state_dir)
     since = t - timedelta(days=days)
@@ -172,6 +199,7 @@ def run_review(ctx, t: datetime, days: int = 7) -> dict | None:
         "statistiche": stats(trades),
         "trade_chiusi": trades[-50:],
         "rifiuti_della_gabbia": cage_rejections(ctx.state_dir, since),
+        "titoli_scelti_come_sono_andati": pick_outcomes(ctx, since),
         "lezioni_attuali": current.get("lessons", []),
         "esperimento_della_settimana": current.get("experiment"),
         "voti_precedenti": [h["grade"] for h in current.get("history", [])][-8:],
