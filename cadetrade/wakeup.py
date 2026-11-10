@@ -124,7 +124,7 @@ def _cancel_broker_stops(ctx, symbol: str) -> None:
         log.warning("stop di %s sul broker non cancellato: %s", symbol, e)
 
 
-def sync_broker_stops(ctx, positions: dict, records: dict) -> None:
+def sync_broker_stops(ctx, positions: dict, records: dict, alarm_run: str | None = None) -> None:
     """Ogni azione in portafoglio ha UN ordine stop sul broker, alla quantità e al prezzo del suo record.
     Così è protetta anche se il server si ferma o il titolo apre in gap."""
     b = ctx.broker
@@ -159,6 +159,8 @@ def sync_broker_stops(ctx, positions: dict, records: dict) -> None:
                 log.info("stop %s piazzato sul broker a %.2f (%d pezzi)", sym, stop, qty)
     except (BrokerUnavailable, BrokerRejected) as e:
         log.warning("stop sul broker non allineati: %s (riprovo al prossimo giro)", e)
+        if alarm_run:   # dalla sveglia lo si dice anche su Telegram; il guardiano riprova in silenzio
+            ctx.notifier.alarm(f"Stop su Alpaca non piazzati ({e}): il guardiano li protegge e riprova.", alarm_run)
 
 
 def collect_stop_fills(ctx, records: dict, positions: dict, recent: list, risk: dict, t: datetime) -> list[dict]:
@@ -331,7 +333,7 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
         try:
             positions_after = b.positions()
             sync_records(records, positions_after, now_ts=t)
-            sync_broker_stops(ctx, positions_after, records)
+            sync_broker_stops(ctx, positions_after, records, alarm_run=rid)
         except BrokerUnavailable:
             pass
         risk["peak_equity"] = max(peak, account_after["equity"])
