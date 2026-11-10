@@ -1,8 +1,8 @@
 # Usato dal Docker Manager di Hostinger. Le chiavi arrivano come variabili d'ambiente del progetto, mai nel codice.
 services:
   cadetrade:
-    build: https://github.com/cadetrade/cadetrade.git#main
-    image: cadetrade:latest
+    image: ghcr.io/cadetrade/cadetrade:latest
+    pull_policy: always
     restart: unless-stopped
     command: ["python", "-m", "cadetrade", "schedule", "--brain", "claude-code"]
     environment:
