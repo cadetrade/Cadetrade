@@ -7,5 +7,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
+RUN python -m pytest -q
 VOLUME ["/app/state", "/app/logs"]
 CMD ["python", "-m", "cadetrade", "schedule"]

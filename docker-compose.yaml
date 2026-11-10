@@ -1,0 +1,20 @@
+# Usato dal Docker Manager di Hostinger. Le chiavi arrivano come variabili d'ambiente del progetto, mai nel codice.
+services:
+  cadetrade:
+    build: https://github.com/cadetrade/cadetrade.git#main
+    image: cadetrade:latest
+    restart: unless-stopped
+    command: ["python", "-m", "cadetrade", "schedule", "--brain", "claude-code"]
+    environment:
+      - ALPACA_KEY_ID=${ALPACA_KEY_ID}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - TZ=Europe/Rome
+    volumes:
+      - state:/app/state
+      - logs:/app/logs
+volumes:
+  state:
+  logs:
