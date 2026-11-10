@@ -86,7 +86,11 @@ def main(argv=None):
         setup_logging(secrets, LOGS / "schedule.log")
         ctx = build_ctx(a, secrets)
         log = logging.getLogger("schedule")
-        log.info("Sempre acceso. Prossima sveglia %s. Guardiano stop ogni %ss.", f"{next_slot(now()):%Y-%m-%d %H:%M}", CAGE.guard_interval_s)
+        msg = f"Sempre acceso. Prossima sveglia {next_slot(now()):%Y-%m-%d %H:%M}. Guardiano stop ogni {CAGE.guard_interval_s}s."
+        log.info(msg)
+        brain_on = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"))
+        ctx.notifier.send(f"🟢 CadeTrade acceso (conto demo). {msg}"
+                          + ("" if brain_on else "\n⚠️ Cervello spento: manca il token di Claude, applico solo gli stop."))
         last_guard = 0.0
         while True:
             t = now()
