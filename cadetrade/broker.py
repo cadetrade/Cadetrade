@@ -198,7 +198,8 @@ class FakeBroker:
 
     def _save(self, s: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
+        import os
+        tmp = self.path.with_suffix(f".tmp{os.getpid()}")   # due processi di prova non si pestano il file temporaneo
         tmp.write_text(json.dumps(s, indent=2))
         tmp.replace(self.path)
 
