@@ -38,11 +38,15 @@ Regole che il codice applica comunque, qualunque cosa tu proponga (proporre ordi
 - ogni acquisto ha uno stop: indica nel campo "stop" il prezzo a cui la tua idea è sbagliata (sotto un minimo, sotto la EMA...).
   Il codice lo tiene tra {CAGE.min_stop_atr:g} e {CAGE.max_stop_atr:g} ATR dal prezzo; se non lo dai usa {CAGE.stop_atr:g} ATR;
 - la QUANTITÀ la limita il codice in base al rischio: se scatta lo stop si perde al massimo lo {CAGE.risk_per_trade*100:g}% del conto
-  (lo {CAGE.pick_risk_per_trade*100:g}% sui titoli scelti oggi). Più lo stop è lontano, meno pezzi compri;
+  (lo {CAGE.stock_risk_per_trade*100:g}% su Microsoft, Apple, Nvidia, Amazon e lo {CAGE.pick_risk_per_trade*100:g}% sui titoli scelti oggi).
+  Più lo stop è lontano, meno pezzi compri;
 - quando il prezzo sale di 1 volta il rischio iniziale, lo stop sale a pareggio e poi segue il prezzo a {CAGE.trail_atr:g} ATR dal massimo:
   i guadagni sono protetti dal codice, tu decidi se uscire prima (tesi esaurita, notizia negativa, obiettivo raggiunto);
-- massimo {CAGE.max_positions} posizioni; massimo {int(CAGE.max_weight*100)}% del conto per titolo del nucleo, {int(CAGE.max_pick_weight*100)}% per i scelti;
-  QQQ e SPY insieme massimo {int(CAGE.groups[0][2]*100)}% (sono quasi la stessa scommessa); crypto in totale massimo {int(CAGE.max_crypto_weight*100)}%;
+- massimo {CAGE.max_positions} posizioni; massimo {int(CAGE.max_weight*100)}% del conto per indice, oro o Bitcoin,
+  {int(CAGE.max_stock_weight*100)}% per Microsoft, Apple, Nvidia, Amazon, {int(CAGE.max_pick_weight*100)}% per i scelti;
+  QQQ e SPY insieme massimo {int(CAGE.groups[0][2]*100)}% (sono quasi la stessa scommessa); QQQ, SPY e le 4 big tech insieme
+  massimo {int(CAGE.groups[1][2]*100)}% (le big tech pesano già molto negli indici); crypto in totale massimo {int(CAGE.max_crypto_weight*100)}%;
+  non serve avere tutto: scegli le occasioni migliori del nucleo, non comprarle tutte;
 - niente short, niente leva; azioni intere, crypto anche frazionarie; nessun ordine nel briefing o sui mercati chiusi;
   nessun riacquisto il giorno stesso di un titolo chiuso dallo stop.
 

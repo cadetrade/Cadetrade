@@ -14,8 +14,14 @@ CORE = {
     "QQQ": "Nasdaq 100",
     "SPY": "S&P 500",
     "BTC/USD": "Bitcoin",
+    "MSFT": "Microsoft",
+    "AAPL": "Apple",
+    "NVDA": "Nvidia",
+    "AMZN": "Amazon",
 }
 UNIVERSE = list(CORE)
+# azioni singole del nucleo: più volatili di un indice, quindi peso e rischio più bassi
+SINGLE_STOCKS = ("MSFT", "AAPL", "NVDA", "AMZN")
 
 # Le crypto che Alpaca permette di tradare: tra queste può cadere la scelta del giorno.
 CRYPTO_TRADABLE = ["BTC", "ETH", "SOL", "AVAX", "LINK", "DOGE", "LTC", "XRP", "DOT", "UNI", "AAVE", "BCH", "SHIB"]
@@ -59,14 +65,19 @@ SLOT_GRACE_MIN = 60          # oltre 60 minuti una sveglia persa non si recupera
 
 @dataclass(frozen=True)
 class Cage:
-    max_positions: int = 6            # i 4 del nucleo + le 2 scelte del giorno
-    max_weight: float = 0.20          # per titolo del nucleo, sul valore del conto
+    max_positions: int = 8            # non tutto insieme: 8 posizioni su 10 titoli possibili
+    max_weight: float = 0.20          # per indice/oro/bitcoin del nucleo, sul valore del conto
+    max_stock_weight: float = 0.12    # per Microsoft, Apple, Nvidia, Amazon
     max_pick_weight: float = 0.10     # per titolo scelto dal bot: più volatile, metà del peso
     max_crypto_weight: float = 0.30   # tutte le crypto insieme
     # titoli che si muovono quasi insieme contano come una scommessa sola
-    groups: tuple = (("indici USA (QQQ+SPY)", ("QQQ", "SPY"), 0.30),)
+    # (Microsoft, Apple, Nvidia e Amazon pesano già molto dentro QQQ e SPY)
+    groups: tuple = (("indici USA (QQQ+SPY)", ("QQQ", "SPY"), 0.30),
+                     ("tecnologia USA (QQQ, SPY, Microsoft, Apple, Nvidia, Amazon)",
+                      ("QQQ", "SPY", "MSFT", "AAPL", "NVDA", "AMZN"), 0.50))
     # rischio per operazione: quanto del conto si perde se scatta lo stop. La quantità la calcola il codice.
     risk_per_trade: float = 0.0075    # nucleo: 0,75% del conto
+    stock_risk_per_trade: float = 0.005  # azioni singole del nucleo: 0,5%
     pick_risk_per_trade: float = 0.004  # scelti per fomo: 0,4%
     # stop in base alla volatilità (ATR 14 giorni): normale 2 ATR, mai sotto 1 né oltre 3,5
     stop_atr: float = 2.0

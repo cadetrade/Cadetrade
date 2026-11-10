@@ -114,3 +114,16 @@ def test_news_reach_the_brain(tmp_path):
     run_wakeup(ctx, "1540", at("1540"))
     assert ctx.brain.contexts[0]["notizie"][0]["titolo"] == "Fed: tassi fermi"
     assert ctx.brain.contexts[0]["sveglia"]["si_puo_entrare"] is True
+
+
+def test_big_tech_have_lower_cap_and_share_the_tech_group():
+    v = review([{"symbol": "NVDA", "side": "buy", "qty": 70, "why": "x"}], slot_hhmm="1540", account=ACC, positions={},
+               prices={"NVDA": 180}, stock_market_open=True, peak_equity=100_000, stopped_today=set(), atr={"NVDA": 2.0})
+    assert "oltre il 12%" in v.rejected[0]["reason"]               # 12.600 $ = 12,6%
+    pos = {s: {"qty": 1, "avg_entry": 10_000, "price": 10_000, "market_value": 10_000, "plpc": 0.0}
+           for s in ("SPY", "MSFT", "AAPL", "AMZN")}
+    acc = {"equity": 100_000.0, "cash": 60_000.0, "last_equity": 100_000.0}
+    v = review([{"symbol": "NVDA", "side": "buy", "qty": 60, "why": "x"}], slot_hhmm="1540", account=acc, positions=pos,
+               prices={"NVDA": 180, **{s: 10_000 for s in pos}}, stock_market_open=True, peak_equity=100_000,
+               stopped_today=set(), atr={"NVDA": 2.0})
+    assert "tecnologia USA" in v.rejected[0]["reason"]             # 40% + 10,8% > 50%

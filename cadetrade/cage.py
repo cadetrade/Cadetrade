@@ -2,7 +2,7 @@
 import math
 from dataclasses import dataclass, field
 
-from .config import CAGE, SLOT_BY_HHMM, UNIVERSE, Cage, is_crypto
+from .config import CAGE, SINGLE_STOCKS, SLOT_BY_HHMM, UNIVERSE, Cage, is_crypto
 from .stops import forced_stops, initial_stop
 
 
@@ -91,7 +91,8 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
             reject(o, "chiuso dallo stop oggi: niente riacquisto fino a domani"); continue
         # la quantità la decide il rischio: se scatta lo stop si perde al massimo lo 0,75% del conto (0,4% sui scelti)
         stop_px = initial_stop(price, atr.get(sym), o.get("stop"), cage)
-        risk_pct = cage.risk_per_trade if sym in UNIVERSE else cage.pick_risk_per_trade
+        risk_pct = (cage.stock_risk_per_trade if sym in SINGLE_STOCKS else
+                    cage.risk_per_trade if sym in UNIVERSE else cage.pick_risk_per_trade)
         max_qty = equity * risk_pct / (price - stop_px)
         if not is_crypto(sym):
             max_qty = math.floor(max_qty)
@@ -108,7 +109,8 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
             reject(o, f"già {cage.max_positions} posizioni"); continue
         if sym not in buyable:
             reject(o, "non è più tra le scelte di oggi: si può solo vendere"); continue
-        cap = cage.max_weight if sym in UNIVERSE else cage.max_pick_weight
+        cap = (cage.max_stock_weight if sym in SINGLE_STOCKS else
+               cage.max_weight if sym in UNIVERSE else cage.max_pick_weight)
         new_weight = (value.get(sym, 0.0) + notional) / equity
         if new_weight > cap + 1e-9:
             reject(o, f"oltre il {int(cap*100)}% del conto per titolo: sarebbe il {new_weight*100:.1f}%"); continue
