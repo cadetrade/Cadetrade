@@ -3,6 +3,7 @@ import math
 from dataclasses import dataclass, field
 
 from .config import CAGE, SLOT_BY_HHMM, UNIVERSE, Cage, is_crypto
+from .stops import forced_stops, initial_stop
 
 
 @dataclass
@@ -12,21 +13,13 @@ class Verdict:
     halted: str | None = None
 
 
-def forced_stops(positions: dict, cage: Cage = CAGE) -> list[dict]:
-    """Posizioni sotto lo stop: si vendono tutte, il modello non viene consultato."""
-    out = []
-    for sym, p in positions.items():
-        if p["qty"] > 0 and p["plpc"] <= cage.stop_loss:
-            out.append({"symbol": sym, "side": "sell", "qty": p["qty"], "forced": True,
-                        "why": f"stop loss: {p['plpc']*100:.1f}% dal carico"})
-    return out
-
-
 def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: dict, prices: dict,
            stock_market_open: bool, peak_equity: float, stopped_today: set, picks: set = frozenset(),
-           cage: Cage = CAGE) -> Verdict:
+           stops: dict | None = None, atr: dict | None = None, cage: Cage = CAGE) -> Verdict:
     """picks = i titoli scelti oggi dal codice: si possono comprare, con un peso massimo più basso.
-    Le posizioni aperte in giorni precedenti si possono sempre vendere."""
+    Le posizioni aperte in giorni precedenti si possono sempre vendere.
+    stops = gli stop di ogni posizione (stops.py); atr = volatilità in $ per titolo, per lo stop e la quantità."""
+    atr = atr or {}
     v = Verdict()
     buyable = set(UNIVERSE) | set(picks)
     slot = SLOT_BY_HHMM[slot_hhmm]
@@ -50,7 +43,7 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
     value = {s: p["market_value"] for s, p in positions.items()}
 
     # 1) gli stop vengono prima di tutto e non contano nel limite di ordini
-    stops = forced_stops(positions, cage)
+    stops = forced_stops(positions, stops, cage)
     stop_syms = set()
     for o in stops:
         if is_crypto(o["symbol"]) or stock_market_open:   # lo stop vale anche nel briefing
@@ -90,10 +83,24 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
             v.accepted.append({**o, "qty": qty, "forced": False})
             continue
         # acquisti
+        if not slot.entries:
+            reject(o, f"sveglia {slot.name}: si entra solo all'apertura (15:40) e alla chiusura (21:40)"); continue
         if v.halted:
             reject(o, v.halted); continue
         if sym in stopped_today:
             reject(o, "chiuso dallo stop oggi: niente riacquisto fino a domani"); continue
+        # la quantità la decide il rischio: se scatta lo stop si perde al massimo lo 0,75% del conto (0,4% sui scelti)
+        stop_px = initial_stop(price, atr.get(sym), o.get("stop"), cage)
+        risk_pct = cage.risk_per_trade if sym in UNIVERSE else cage.pick_risk_per_trade
+        max_qty = equity * risk_pct / (price - stop_px)
+        if not is_crypto(sym):
+            max_qty = math.floor(max_qty)
+        sized = ""
+        if qty > max_qty + 1e-9:
+            if max_qty < (1 if not is_crypto(sym) else 1e-6):
+                reject(o, "stop troppo lontano per il rischio ammesso"); continue
+            sized = f" [quantità ridotta da {qty:g} a {max_qty:g} per il rischio]"
+            qty = max_qty
         notional = qty * price
         if notional < cage.min_order_usd:
             reject(o, f"ordine sotto {cage.min_order_usd:.0f} $"); continue
@@ -109,10 +116,20 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
             crypto_w = (sum(val for s, val in value.items() if is_crypto(s)) + notional) / equity
             if crypto_w > cage.max_crypto_weight + 1e-9:
                 reject(o, f"crypto oltre il {int(cage.max_crypto_weight*100)}% del conto: sarebbero il {crypto_w*100:.1f}%"); continue
+        hit = False
+        for gname, gsyms, gcap in cage.groups:
+            if sym in gsyms:
+                gw = (sum(value.get(s, 0.0) for s in gsyms) + notional) / equity
+                if gw > gcap + 1e-9:
+                    reject(o, f"{gname} oltre il {int(gcap*100)}% del conto: sarebbero il {gw*100:.1f}%"); hit = True
+                    break
+        if hit:
+            continue
         if notional > cash:
             reject(o, "liquidità insufficiente: niente leva"); continue
         cash -= notional
         held[sym] = held.get(sym, 0.0) + qty
         value[sym] = value.get(sym, 0.0) + notional
-        v.accepted.append({**o, "qty": qty, "forced": False})
+        v.accepted.append({**o, "qty": qty, "forced": False, "stop": stop_px, "atr": atr.get(sym),
+                           "why": o["why"] + sized})
     return v

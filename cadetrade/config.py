@@ -39,17 +39,19 @@ class Slot:
     hhmm: str        # ora di Roma
     name: str
     markets: frozenset   # cosa può tradare: "stock", "crypto"
+    entries: bool = False    # posizioni nuove o aumenti solo qui; le altre sveglie gestiscono il rischio (vendite)
 
 
 # Borsa USA 15:30-22:00 ora di Roma. Le crypto sono aperte h24: tre sveglie notturne/mattutine solo crypto.
+# Si entra solo due volte al giorno (apertura e chiusura): meno decisioni, più qualità. Le altre sveglie possono solo vendere.
 SLOTS = [
     Slot("0100", "notte", frozenset({"crypto"})),
     Slot("0500", "alba", frozenset({"crypto"})),
     Slot("0900", "briefing", frozenset()),            # nessun ordine: legge e fissa il piano
     Slot("1300", "mezzogiorno", frozenset({"crypto"})),
-    Slot("1540", "apertura", frozenset({"stock", "crypto"})),
+    Slot("1540", "apertura", frozenset({"stock", "crypto"}), entries=True),
     Slot("1830", "metà seduta", frozenset({"stock", "crypto"})),
-    Slot("2140", "chiusura", frozenset({"stock", "crypto"})),
+    Slot("2140", "chiusura", frozenset({"stock", "crypto"}), entries=True),
 ]
 SLOT_BY_HHMM = {s.hhmm: s for s in SLOTS}
 SLOT_GRACE_MIN = 60          # oltre 60 minuti una sveglia persa non si recupera
@@ -61,7 +63,19 @@ class Cage:
     max_weight: float = 0.20          # per titolo del nucleo, sul valore del conto
     max_pick_weight: float = 0.10     # per titolo scelto dal bot: più volatile, metà del peso
     max_crypto_weight: float = 0.30   # tutte le crypto insieme
-    stop_loss: float = -0.03          # dal prezzo di carico: vende anche se il modello non lo chiede
+    # titoli che si muovono quasi insieme contano come una scommessa sola
+    groups: tuple = (("indici USA (QQQ+SPY)", ("QQQ", "SPY"), 0.30),)
+    # rischio per operazione: quanto del conto si perde se scatta lo stop. La quantità la calcola il codice.
+    risk_per_trade: float = 0.0075    # nucleo: 0,75% del conto
+    pick_risk_per_trade: float = 0.004  # scelti per fomo: 0,4%
+    # stop in base alla volatilità (ATR 14 giorni): normale 2 ATR, mai sotto 1 né oltre 3,5
+    stop_atr: float = 2.0
+    min_stop_atr: float = 1.0
+    max_stop_atr: float = 3.5
+    stop_loss: float = -0.03          # stop di riserva per posizioni senza ATR (o aperte a mano)
+    # proteggere i guadagni: dopo +1R lo stop sale a pareggio e poi segue il prezzo a 2,5 ATR dal massimo
+    breakeven_r: float = 1.0
+    trail_atr: float = 2.5
     daily_loss_halt: float = -0.03    # P&L del giorno sotto -3%: niente acquisti nuovi fino a domani
     max_drawdown: float = -0.15       # dal massimo storico del conto: solo vendite, serve un umano
     max_orders_per_run: int = 6

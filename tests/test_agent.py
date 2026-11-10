@@ -88,7 +88,7 @@ def test_no_rebuy_same_day_after_stop(tmp_path):
     run_wakeup(ctx, "1540", at("1540"))
     ctx.brain = FakeBrain({"orders": [{"symbol": "QQQ", "side": "buy", "qty": 10, "why": "rimbalzo"}],
                            "reasoning": "r", "planNext": "p"})
-    baton = run_wakeup(ctx, "1830", at("1830"))
+    baton = run_wakeup(ctx, "2140", at("2140"))
     assert "chiuso dallo stop oggi" in baton["rejected"][0]["reason"]
 
 
@@ -131,12 +131,19 @@ def test_briefing_sends_no_orders_but_crypto_stop_still_runs(tmp_path):
     assert all("nessun ordine" in r["reason"] for r in baton["rejected"] if r["symbol"] != "BTC/USD")
 
 
-def test_crypto_trades_at_night_stocks_do_not(tmp_path):
+def test_crypto_trades_when_stock_market_closed(tmp_path):
     ctx = make_ctx(tmp_path / "s")
     ctx.broker.set(market_open=False)
-    baton = run_wakeup(ctx, "0100", at("0100"))
+    baton = run_wakeup(ctx, "2140", at("2140"))
     assert [o["symbol"] for o in baton["orders"]] == ["BTC/USD"]
     assert {r["symbol"] for r in baton["rejected"]} == {"SPY", "QQQ", "GLD"}
+
+
+def test_night_wakeup_manages_risk_but_does_not_enter(tmp_path):
+    ctx = make_ctx(tmp_path / "s")
+    baton = run_wakeup(ctx, "0100", at("0100"))
+    assert baton["orders"] == []
+    assert all("si entra solo" in r["reason"] for r in baton["rejected"] if r["symbol"] == "BTC/USD")
 
 
 # --- guardiano: lo stop scatta entro un minuto, non alla sveglia dopo ---
@@ -147,7 +154,7 @@ def test_guard_sells_once_and_blocks_rebuy(tmp_path):
     assert first[0]["outcome"] == "inviato"
     assert guard(ctx, at("0316")) == []
     ctx.brain = FakeBrain({"orders": [{"symbol": "BTC/USD", "side": "buy", "qty": 0.01, "why": ""}], "reasoning": "r", "planNext": "p"})
-    baton = run_wakeup(ctx, "0500", at("0500"))
+    baton = run_wakeup(ctx, "2140", at("2140"))
     assert "chiuso dallo stop oggi" in baton["rejected"][0]["reason"]
 
 

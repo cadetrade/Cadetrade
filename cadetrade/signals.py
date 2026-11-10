@@ -31,6 +31,7 @@ def compute(broker, symbols=UNIVERSE) -> dict:
                 "sopra_ema50": last > e50,
                 "sopra_ema200": last > e200,
                 "rsi14": round(float(rsi(c).iloc[-1]), 1),
+                "atr14": round(float(atr(df, 14).iloc[-1]), 6),
                 "atr14_%": round(float(atr(df, 14).iloc[-1]) / last * 100, 2),
                 "dist_max_60g_%": round((last / float(c.iloc[-60:].max()) - 1) * 100, 2),
             }

@@ -100,6 +100,34 @@ class AlpacaPaper:
         # Nessun retry automatico sull'invio: dopo un errore di rete si ricontrolla per id.
         return self._order(self._req("POST", PAPER_URL + "/v2/orders", body, retries=1))
 
+    # --- stop veri sul broker (solo azioni: le crypto le protegge il guardiano, aperte h24 e senza gap) ---
+    def open_stops(self) -> list[dict]:
+        rows = self._get("/v2/orders", status="open", limit=500) or []
+        return [{"id": o["id"], "client_order_id": o.get("client_order_id"), "symbol": norm(o["symbol"]),
+                 "qty": float(o.get("qty") or 0), "stop_price": float(o["stop_price"])}
+                for o in rows if o.get("type") == "stop" and o.get("side") == "sell" and o.get("stop_price")]
+
+    def submit_stop(self, symbol: str, qty: float, stop_price: float, client_order_id: str) -> dict:
+        body = {"symbol": symbol, "qty": str(int(qty)), "side": "sell", "type": "stop", "time_in_force": "gtc",
+                "stop_price": _fmt_price(stop_price), "client_order_id": client_order_id}
+        return self._order(self._req("POST", PAPER_URL + "/v2/orders", body, retries=1))
+
+    def replace_stop(self, order_id: str, qty: float, stop_price: float) -> dict:
+        """Sposta uno stop esistente in un colpo solo (niente buco tra cancella e ricrea)."""
+        body = {"qty": str(int(qty)), "stop_price": _fmt_price(stop_price)}
+        return self._order(self._req("PATCH", f"{PAPER_URL}/v2/orders/{order_id}", body, retries=1))
+
+    def cancel(self, order_id: str) -> None:
+        self._req("DELETE", f"{PAPER_URL}/v2/orders/{order_id}")
+
+    def news(self, symbols: list[str], limit: int = 15) -> list[dict]:
+        """Ultime notizie (Benzinga, gratis con Alpaca) sui titoli seguiti."""
+        syms = ",".join(s.replace("/", "") for s in symbols)
+        r = self._req("GET", f"{DATA_URL}/v1beta1/news?" + urllib.parse.urlencode(
+            {"symbols": syms, "limit": limit, "sort": "desc"})) or {}
+        return [{"ora": n.get("created_at"), "titolo": n.get("headline"), "simboli": n.get("symbols", [])[:6],
+                 "sintesi": (n.get("summary") or "")[:240]} for n in r.get("news", [])]
+
     def latest_price(self, symbol: str) -> float:
         if is_crypto(symbol):
             r = self._req("GET", f"{DATA_URL}/v1beta3/crypto/us/latest/trades?symbols={urllib.parse.quote(symbol)}")
@@ -140,6 +168,10 @@ class AlpacaPaper:
                 "status": o.get("status"), "filled_avg_price": float(o["filled_avg_price"]) if o.get("filled_avg_price") else None}
 
 
+def _fmt_price(p: float) -> str:
+    return f"{p:.2f}" if p >= 1 else f"{p:.4f}"
+
+
 def _fmt_qty(symbol: str, qty: float) -> str:
     return f"{math.floor(qty * 1e6) / 1e6:.6f}" if is_crypto(symbol) else str(int(qty))
 
@@ -176,9 +208,55 @@ class FakeBroker:
         self._save(s)
 
     def set_price(self, symbol: str, price: float) -> None:
+        """Muove il prezzo; se scende sotto uno stop sul broker, lo stop si esegue a quel prezzo (anche in gap)."""
         s = self._load()
         s["prices"][symbol] = price
+        for o in s.setdefault("stops", []):
+            if o["status"] == "new" and o["symbol"] == symbol and price <= o["stop_price"] and symbol in s["positions"]:
+                pos = s["positions"][symbol]
+                qty = min(o["qty"], pos["qty"])
+                s["cash"] += qty * price
+                pos["qty"] -= qty
+                if pos["qty"] <= 1e-9:
+                    s["positions"].pop(symbol)
+                o.update(status="filled", filled_avg_price=price)
+                s["orders"].append({"client_order_id": o["client_order_id"], "symbol": symbol, "side": "sell",
+                                    "qty": qty, "status": "filled", "filled_avg_price": price})
         self._save(s)
+
+    def open_stops(self) -> list[dict]:
+        return [dict(o) for o in self._load().get("stops", []) if o["status"] == "new"]
+
+    def submit_stop(self, symbol: str, qty: float, stop_price: float, client_order_id: str) -> dict:
+        s = self._load()
+        held = s["positions"].get(symbol, {}).get("qty", 0) - sum(o["qty"] for o in s.get("stops", [])
+                                                                 if o["status"] == "new" and o["symbol"] == symbol)
+        if qty > held + 1e-9:
+            raise BrokerRejected("insufficient qty available for order")
+        o = {"id": f"stop{len(s.setdefault('stops', []))}", "client_order_id": client_order_id, "symbol": symbol,
+             "qty": float(qty), "stop_price": float(_fmt_price(stop_price)), "status": "new"}
+        s["stops"].append(o)
+        self._save(s)
+        return dict(o)
+
+    def replace_stop(self, order_id: str, qty: float, stop_price: float) -> dict:
+        s = self._load()
+        for o in s.get("stops", []):
+            if o["id"] == order_id and o["status"] == "new":
+                o.update(qty=float(qty), stop_price=float(_fmt_price(stop_price)))
+                self._save(s)
+                return dict(o)
+        raise BrokerRejected("order not found")
+
+    def cancel(self, order_id: str) -> None:
+        s = self._load()
+        for o in s.get("stops", []):
+            if o["id"] == order_id and o["status"] == "new":
+                o["status"] = "canceled"
+        self._save(s)
+
+    def news(self, symbols: list[str], limit: int = 15) -> list[dict]:
+        return self._load().get("news", [])[:limit]
 
     def account(self) -> dict:
         s = self._load()
@@ -219,7 +297,8 @@ class FakeBroker:
             s["cash"] -= qty * price
             s["positions"][symbol] = pos
         else:
-            if qty > pos["qty"] + 1e-9:
+            reserved = sum(o["qty"] for o in s.get("stops", []) if o["status"] == "new" and o["symbol"] == symbol)
+            if qty > pos["qty"] - reserved + 1e-9:
                 raise BrokerRejected("insufficient qty available for order")
             s["cash"] += qty * price
             pos["qty"] -= qty

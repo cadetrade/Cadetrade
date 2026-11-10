@@ -11,7 +11,9 @@ Basato sulla guida *Il mio trader in quattro passi*, con questi miglioramenti:
 | 8 titoli fissi | Nucleo fisso **oro (GLD), Nasdaq 100 (QQQ), S&P 500 (SPY), Bitcoin** + **1-2 titoli scelti ogni giorno** dal codice per volumi anomali e slancio ("fomo"), max 10% ciascuno |
 | La pagella la domenica, ma il bot non la usa | **Impara dagli errori**: diario di ogni trade (tesi all'acquisto, esito), pagella settimanale che riscrive le lezioni e propone un esperimento; lezioni ed esperimento entrano in ogni decisione |
 | Solo azioni USA, 4 sveglie al giorno | Anche crypto su Alpaca: 7 sveglie, quelle notturne solo crypto, quindi **h24** |
-| Stop a −3% controllato solo alle sveglie (NVDA venduta a −4,8%) | **Guardiano** senza cervello che controlla gli stop **ogni minuto** |
+| Stop a −3% controllato solo alle sveglie (NVDA venduta a −4,8%) | Stop sulla **volatilità** (2 ATR) piazzato **sul broker** per le azioni; il **guardiano** lo fa salire ogni minuto (pareggio dopo +1R, poi 2,5 ATR dal massimo) e protegge le crypto |
+| Quantità a sensazione | Quantità calcolata dal **rischio**: se scatta lo stop si perde lo 0,75% del conto (0,4% sui titoli scelti) |
+| Decisioni a ogni sveglia | Si **entra** solo all'apertura (15:40) e alla chiusura (21:40); le altre sveglie gestiscono il rischio |
 | Nessun limite sul conto intero | **Perdita giornaliera −3%**: stop agli acquisti fino a domani. **Drawdown −15%** dal massimo: solo vendite |
 | Il "niente riacquisto dopo lo stop" era una scelta del modello | È una regola della gabbia |
 | Il cervello decide "a sensazione" | Riceve **indicatori calcolati in codice** (trend EMA50/200, RSI, ATR, distanza dai massimi) |
@@ -43,7 +45,7 @@ Le lezioni cambiano *come sceglie e quando entra*, mai le regole della gabbia. `
 
 ## La gabbia (`cadetrade/config.py`, `cadetrade/cage.py`)
 Nucleo GLD QQQ SPY BTC/USD + le scelte del giorno · max 6 posizioni · max 20% per titolo del nucleo, 10% per le scelte ·
-crypto max 30% · stop −3% · niente short, niente leva, azioni intere · max 6 ordini a sveglia ·
+crypto max 30% · QQQ+SPY insieme max 30% · stop 1-3,5 ATR (−3% se manca l'ATR) · rischio 0,75% per operazione · niente short, niente leva, azioni intere · max 6 ordini a sveglia ·
 perdita del giorno −3% → niente acquisti · drawdown −15% → solo vendite · niente riacquisto il giorno dello stop.
 
 ## Uso
@@ -64,8 +66,9 @@ Con Claude Code serve `claude setup-token` e il token in `secrets.toml`.
 
 ## Limiti che conosco
 - Il broker vero non è stato provato da qui: i test usano quello finto. La prima sveglia vera va guardata.
-- Lo stop è un ordine a mercato del guardiano, non un ordine stop sull'exchange: se il programma è spento, lo stop non scatta.
-- Le azioni si vendono per stop solo a borsa aperta: un gap in apertura può far perdere più del 3%.
+- Le azioni hanno un ordine stop vero su Alpaca: scatta anche a server spento. In un gap di apertura si esce al primo prezzo disponibile, che può essere sotto lo stop.
+- Le crypto non hanno stop sul broker: le protegge il guardiano ogni minuto, quindi se il server è spento non scattano.
+- Le notizie (Benzinga via Alpaca) arrivano al cervello come titoli e sintesi: niente calendario macro ancora.
 - La perdita del giorno usa `last_equity` di Alpaca (chiusura precedente), quindi il "giorno" è quello della borsa USA.
 - I test li ha scritti lo stesso modello che ha scritto il codice: non bastano. Prima di fidarti, settimane di paper.
 - Oro, Nasdaq e S&P 500 sono gli ETF (orari della borsa USA), non i CFD XAU/USD, US100, US500 che girano quasi 24 ore.

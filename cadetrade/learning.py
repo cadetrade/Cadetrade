@@ -59,6 +59,19 @@ class Journal:
                 theses.pop(sym, None)
         _atomic_write(self.theses, theses)
 
+    def record_close(self, sym: str, qty: float, entry: float, exit_px: float, why: str, forced: bool, t: datetime) -> None:
+        """Chiusura avvenuta fuori da una sveglia (stop eseguito dal broker)."""
+        theses = self._load_theses()
+        th = theses.pop(sym, {})
+        row = {"ts": t.isoformat(), "symbol": sym, "kind": th.get("kind", "nucleo" if sym in CORE else "scelto"),
+               "qty": qty, "entry": entry, "exit": exit_px, "pnl_%": round((exit_px / entry - 1) * 100, 2),
+               "pnl_usd": round((exit_px - entry) * qty, 2), "since": th.get("since"), "thesis": th.get("why", ""),
+               "exit_reason": why, "stop": forced}
+        self.trades.parent.mkdir(parents=True, exist_ok=True)
+        with self.trades.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _atomic_write(self.theses, theses)
+
     def closed_trades(self, since: datetime | None = None) -> list[dict]:
         rows = []
         try:

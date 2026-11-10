@@ -1,5 +1,7 @@
 """Il giro di una sveglia, in quest'ordine: lucchetto, testimone, broker, cervello, gabbia, ordini, testimone, Telegram."""
 import logging
+import math
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -8,9 +10,10 @@ from . import signals as signals_mod
 from .baton import BatonStore, _atomic_write
 from .brain import BrainError
 from .broker import BrokerRejected, BrokerUnavailable, DuplicateOrder
-from .cage import forced_stops, review
+from .cage import review
+from .stops import forced_stops, new_record, sync_records
 from .clock import missed_between, name_of, next_slot, now, run_id
-from .config import CAGE, UNIVERSE, is_crypto
+from .config import CAGE, SLOT_BY_HHMM, UNIVERSE, is_crypto
 from .learning import Journal, run_review
 from .picker import picks_for_today
 from .lock import Busy, RunLock
@@ -82,6 +85,8 @@ def send_order(ctx, rid: str, o: dict) -> dict:
             return {**rec, "outcome": "rifiutato", "reason": "mercato chiuso al momento dell'invio"}
     except BrokerUnavailable as e:
         return {**rec, "outcome": "rifiutato", "reason": f"broker non raggiungibile prima dell'invio: {e}"}
+    if o["side"] == "sell":
+        _cancel_broker_stops(ctx, o["symbol"])
     try:
         res = b.submit(o["symbol"], o["side"], o["qty"], cid)
         log.info("inviato %s · %s · %s", cid, o["qty"], res.get("status"))
@@ -99,6 +104,81 @@ def send_order(ctx, rid: str, o: dict) -> dict:
         if found:
             return {**rec, "outcome": "inviato", "status": found.get("status")}
         return {**rec, "outcome": "non partito", "reason": "il broker non l'ha ricevuto"}
+
+
+# --- stop veri sul broker (azioni) e stop eseguiti dal broker ---
+def _cancel_broker_stops(ctx, symbol: str) -> None:
+    """Prima di vendere un'azione si tolgono i suoi stop dal broker, altrimenti le azioni risultano impegnate."""
+    b = ctx.broker
+    if is_crypto(symbol) or not hasattr(b, "open_stops"):
+        return
+    try:
+        mine = [o for o in b.open_stops() if o["symbol"] == symbol]
+        for o in mine:
+            b.cancel(o["id"])
+        for _ in range(5):   # la cancellazione su Alpaca è asincrona: aspetto che sparisca
+            if not any(o["symbol"] == symbol for o in b.open_stops()):
+                return
+            time.sleep(1)
+    except (BrokerUnavailable, BrokerRejected) as e:
+        log.warning("stop di %s sul broker non cancellato: %s", symbol, e)
+
+
+def sync_broker_stops(ctx, positions: dict, records: dict) -> None:
+    """Ogni azione in portafoglio ha UN ordine stop sul broker, alla quantità e al prezzo del suo record.
+    Così è protetta anche se il server si ferma o il titolo apre in gap."""
+    b = ctx.broker
+    if not hasattr(b, "open_stops"):
+        return
+    try:
+        by_sym = {}
+        for o in b.open_stops():
+            by_sym.setdefault(o["symbol"], []).append(o)
+        for sym, orders in by_sym.items():   # stop rimasti senza posizione: via
+            if sym not in positions or sym not in records:
+                for o in orders:
+                    b.cancel(o["id"])
+        for sym, p in positions.items():
+            rec = records.get(sym)
+            if is_crypto(sym) or not rec:
+                continue
+            qty = math.floor(p["qty"] + 1e-9)
+            stop = round(rec["stop"], 2)
+            if qty < 1 or p["price"] <= stop:
+                continue   # sotto lo stop ci pensa il guardiano con un ordine a mercato
+            orders = by_sym.get(sym, [])
+            for o in orders[1:]:
+                b.cancel(o["id"])
+            if orders:
+                o = orders[0]
+                if abs(o["qty"] - qty) > 1e-9 or abs(o["stop_price"] - stop) > 0.006:
+                    b.replace_stop(o["id"], qty, stop)
+                    log.info("stop %s spostato a %.2f (%d pezzi)", sym, stop, qty)
+            else:
+                b.submit_stop(sym, qty, stop, f"stop-{sym}-{int(time.time() * 1000)}")
+                log.info("stop %s piazzato sul broker a %.2f (%d pezzi)", sym, stop, qty)
+    except (BrokerUnavailable, BrokerRejected) as e:
+        log.warning("stop sul broker non allineati: %s (riprovo al prossimo giro)", e)
+
+
+def collect_stop_fills(ctx, records: dict, positions: dict, recent: list, risk: dict, t: datetime) -> list[dict]:
+    """Stop eseguiti dal broker tra un giro e l'altro: vanno nel diario e bloccano il riacquisto in giornata."""
+    seen = set(risk.setdefault("stop_fills_seen", []))
+    out = []
+    for o in recent:
+        cid = o.get("client_order_id") or ""
+        if not cid.startswith("stop-") or o.get("status") != "filled" or cid in seen:
+            continue
+        sym = o["symbol"]
+        rec = records.get(sym)
+        seen.add(cid)
+        px = o.get("filled_avg_price") or 0.0
+        if rec and px:
+            Journal(ctx.state_dir).record_close(sym, o["qty"], rec["entry"], px, f"stop sul broker a {rec['stop']:.2f}",
+                                                rec["stop"] < rec["entry"], t)
+        out.append({"symbol": sym, "qty": o["qty"], "price": px})
+    risk["stop_fills_seen"] = sorted(seen)[-200:]
+    return out
 
 
 def reconcile(ctx, dead: dict) -> list[dict]:
@@ -170,11 +250,25 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
         risk = load_risk(ctx)
         peak = max(float(risk.get("peak_equity") or 0.0), account["equity"])
         stopped = stopped_today(risk, t)
+        records = risk.setdefault("stops", {})
+        for f in collect_stop_fills(ctx, records, positions, recent, risk, t):
+            stopped.add(f["symbol"])
+            n.send(f"🛑 Stop eseguito dal broker: venduto {f['qty']:g} {f['symbol']} a {f['price']:.2f}\n· run {rid}")
+        sync_records(records, positions, now_ts=t)
+        news = []
+        if hasattr(b, "news"):
+            try:
+                news = b.news(watch)
+            except Exception as e:
+                log.warning("notizie non disponibili: %s", e)
         context = {
             "sveglia": {"run_id": rid, "nome": name_of(hhmm), "ora_roma": t.strftime("%Y-%m-%d %H:%M"),
-                        "borsa_usa_aperta": clock["is_open"]},
+                        "borsa_usa_aperta": clock["is_open"], "si_puo_entrare": SLOT_BY_HHMM[hhmm].entries},
             "testimone_precedente": last,
             "conto": account, "posizioni": positions,
+            "stop_attivi": {k: {"stop": round(r["stop"], 4), "entrata": r["entry"], "massimo": r.get("high"),
+                                "protegge_guadagno": r["stop"] >= r["entry"]} for k, r in records.items()},
+            "notizie": news,
             "ordini_ultime_48h": recent[:30],
             "indicatori": sig,
             "scelti_oggi": picks,
@@ -202,9 +296,18 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
                 except Exception:
                     pass
         verdict = review(decision["orders"], slot_hhmm=hhmm, account=account, positions=positions, prices=prices,
-                         stock_market_open=clock["is_open"], peak_equity=peak, stopped_today=stopped, picks=pick_syms)
+                         stock_market_open=clock["is_open"], peak_equity=peak, stopped_today=stopped, picks=pick_syms,
+                         stops=records, atr={k: v["atr14"] for k, v in sig.items() if v.get("atr14")})
 
-        results = [send_order(ctx, rid, o) for o in verdict.accepted]
+        results = []
+        for o in verdict.accepted:
+            r = send_order(ctx, rid, o)
+            if o["side"] == "buy":
+                r["stop"] = o.get("stop")
+                if r["outcome"] == "inviato" and o["symbol"] not in records and o.get("stop"):
+                    records[o["symbol"]] = {**new_record(prices[o["symbol"]], o["stop"], o.get("atr")),
+                                            "pending_since": t.isoformat()}
+            results.append(r)
         journal.record(results, positions, prices, t, pick_syms)
         for r in results:
             if r["forced"] and r["outcome"] in ("inviato", "già inviato"):
@@ -217,6 +320,12 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
             account_after = b.account()
         except BrokerUnavailable:
             account_after = account
+        try:
+            positions_after = b.positions()
+            sync_records(records, positions_after, now_ts=t)
+            sync_broker_stops(ctx, positions_after, records)
+        except BrokerUnavailable:
+            pass
         risk["peak_equity"] = max(peak, account_after["equity"])
         risk.setdefault("stopped", {})[f"{t:%Y-%m-%d}"] = sorted(stopped)
         save_risk(ctx, risk)
@@ -247,7 +356,8 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
                 tail = " [già inviato prima, non ripetuto]"
             else:
                 tail = f" [{r['outcome']}: {r.get('reason', '')}]"
-            return f"{verb} {r['qty']:g} {r['symbol']} ({r['why']}){tail}"
+            stop = f", stop {r['stop']:.2f}" if r.get("stop") else ""
+            return f"{verb} {r['qty']:g} {r['symbol']} ({r['why']}{stop}){tail}"
         msg = [f"✅ Fatto · {name_of(hhmm)}",
                "Ordini: " + ("; ".join(line(r) for r in results) if results else "nessuno")]
         if verdict.rejected:
@@ -268,8 +378,8 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
 
 
 def guard(ctx: Ctx, at: datetime | None = None) -> list[dict]:
-    """Il guardiano: ogni minuto, senza cervello, vende le posizioni sotto lo stop.
-    Così lo stop a -3% scatta vicino a -3%, non alla sveglia successiva."""
+    """Il guardiano: ogni minuto, senza cervello. Fa salire gli stop dietro al prezzo, li tiene allineati sul broker,
+    registra gli stop eseguiti dal broker e vende a mercato ciò che è sotto lo stop (crypto, o azioni senza stop sul broker)."""
     t = at or now()
     gid = f"{t:%Y-%m-%d}-guard"
     lock = ctx.lock
@@ -281,17 +391,21 @@ def guard(ctx: Ctx, at: datetime | None = None) -> list[dict]:
         return []
     try:
         b = ctx.broker
+        risk = load_risk(ctx)
+        records = risk.setdefault("stops", {})
+        stopped = stopped_today(risk, t)
         try:
             positions = b.positions()
-            stops = forced_stops(positions, CAGE)
-            if not stops:
-                return []
-            is_open = b.clock()["is_open"]
+            if any(s not in positions for s in records):
+                for f in collect_stop_fills(ctx, records, positions, b.orders_since(48), risk, t):
+                    stopped.add(f["symbol"])
+                    ctx.notifier.send(f"🛑 Stop eseguito dal broker: venduto {f['qty']:g} {f['symbol']} a {f['price']:.2f}\n· run {gid}")
+            changed = sync_records(records, positions, now_ts=t)
+            stops = forced_stops(positions, records, CAGE)
+            is_open = b.clock()["is_open"] if stops else False
         except BrokerUnavailable:
             return []
         out = []
-        risk = load_risk(ctx)
-        stopped = stopped_today(risk, t)
         prices = {s: p["price"] for s, p in positions.items()}
         for o in stops:
             if not is_crypto(o["symbol"]) and not is_open:
@@ -301,9 +415,15 @@ def guard(ctx: Ctx, at: datetime | None = None) -> list[dict]:
             Journal(ctx.state_dir).record([r], positions, prices, t)
             if r["outcome"] in ("inviato", "già inviato"):
                 stopped.add(o["symbol"])
-                ctx.notifier.send(f"🛑 Stop loss: venduto {o['qty']:g} {o['symbol']} ({o['why']})\n· run {gid}")
+                ctx.notifier.send(f"🛑 Stop: venduto {o['qty']:g} {o['symbol']} ({o['why']})\n· run {gid}")
             elif r["outcome"] == "esito sconosciuto":
                 ctx.notifier.alarm(f"Stop {o['symbol']}: esito incerto, controlla su Alpaca.", gid)
+        if changed or out or t.minute % 15 == 0:
+            try:
+                positions = b.positions() if out else positions
+                sync_broker_stops(ctx, positions, records)
+            except BrokerUnavailable:
+                pass
         risk.setdefault("stopped", {})[f"{t:%Y-%m-%d}"] = sorted(stopped)
         save_risk(ctx, risk)
         return out
