@@ -4,6 +4,7 @@
   python -m cadetrade status [--fake]
   python -m cadetrade reconcile [--fake]
   python -m cadetrade review [--fake]       pagella adesso (di solito la domenica alle 09:00)
+  python -m cadetrade backtest              rigioca le regole sugli ultimi 30/60/120 giorni
   python -m cadetrade lessons               cosa ha imparato finora
 """
 import argparse
@@ -56,7 +57,7 @@ def build_ctx(args, secrets) -> Ctx:
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="cadetrade")
-    p.add_argument("cmd", choices=["once", "schedule", "status", "reconcile", "review", "lessons"])
+    p.add_argument("cmd", choices=["once", "schedule", "status", "reconcile", "review", "lessons", "backtest"])
     p.add_argument("--slot", help="es. 1540")
     p.add_argument("--force", action="store_true")
     p.add_argument("--fake", action="store_true", help="broker e cervello finti, nessuna rete")
@@ -137,6 +138,11 @@ def main(argv=None):
         res = run_review(build_ctx(a, secrets), now())
         return 0 if res else 1
 
+    if a.cmd == "backtest":   # macchina del tempo: le regole sugli ultimi 30/60/120 giorni
+        from . import backtest
+        setup_logging(secrets)
+        backtest.main(build_ctx(a, secrets).broker)
+        return 0
     if a.cmd == "lessons":
         from .learning import Journal, stats
         j = Journal(STATE)
