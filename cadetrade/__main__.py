@@ -90,7 +90,17 @@ def main(argv=None):
         from . import dashboard
         import os as _os
         dashboard.start(ctx, _os.environ.get("DASHBOARD_KEY", ""), int(_os.environ.get("DASHBOARD_PORT", "8080")))
-        msg = f"Sempre acceso. Prossima sveglia {next_slot(now()):%Y-%m-%d %H:%M}. Guardiano stop ogni {CAGE.guard_interval_s}s."
+        strategy = os.environ.get("STRATEGY", "").strip().lower()
+        profile = strategy.split("-", 1)[1] if strategy.startswith("sistema-") else None
+        from .system import PROFILES, SLOT, run_system
+        if profile and profile not in PROFILES:
+            log.error("STRATEGY=%s sconosciuta: uso il bot classico", strategy)
+            profile = None
+        if profile:
+            msg = (f"Sistema {profile}: 60% Nasdaq e 40% oro con leva a volatilità. "
+                   f"Ribilancio ogni giorno di borsa alle 21:40.")
+        else:
+            msg = f"Sempre acceso. Prossima sveglia {next_slot(now()):%Y-%m-%d %H:%M}. Guardiano stop ogni {CAGE.guard_interval_s}s."
         log.info(msg)
         brain_on = bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"))
         ctx.notifier.send(f"🟢 CadeTrade acceso (conto demo). {msg}"
@@ -99,6 +109,14 @@ def main(argv=None):
         while True:
             t = now()
             hhmm = due_slot(t)
+            if profile:   # sistema: un solo appuntamento al giorno, niente cervello né guardiano
+                if hhmm == SLOT:
+                    try:
+                        run_system(ctx, profile, t)
+                    except Exception:
+                        log.exception("ribilancio del sistema fallito")
+                time.sleep(30 if not a.fake else 5)
+                continue
             if hhmm:
                 last = BatonStore(STATE).read()
                 if not last or last["run_id"] < run_id(t, hhmm):

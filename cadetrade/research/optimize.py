@@ -46,8 +46,9 @@ def closes(data: dict) -> pd.DataFrame:
     return px.ffill().loc[days]
 
 
-def simulate(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bool) -> pd.Series:
-    """Valore del conto giorno per giorno (parte da 1)."""
+def targets(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bool) -> pd.DataFrame:
+    """I pesi decisi ogni sera (riga t = cosa tenere da domani), usando solo i prezzi fino alla sera t.
+    È la stessa funzione che usa il bot dal vivo: quello che si prova è quello che gira."""
     rets = px.pct_change().fillna(0.0)
     spy = px["SPY"]
     bull = pd.Series(np.nan, index=px.index)
@@ -101,7 +102,13 @@ def simulate(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: b
                 on.append(flag)
             w[s] = w[s] + dip * pd.Series(on, index=px.index, dtype=float)
     gross = w.abs().sum(axis=1)
-    w = w.mul((MAX_GROSS / gross).clip(upper=1.0), axis=0)   # mai oltre 2x lordo
+    return w.mul((MAX_GROSS / gross.where(gross > 0, 1.0)).clip(upper=1.0), axis=0)   # mai oltre 2x lordo
+
+
+def simulate(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bool) -> pd.Series:
+    """Valore del conto giorno per giorno (parte da 1)."""
+    rets = px.pct_change().fillna(0.0)
+    w = targets(px, base, lever, bear, dip, filt)
     held = w.shift(1).fillna(0.0)
     longs = held.clip(lower=0).sum(axis=1)
     cost_borrow = (longs - 1).clip(lower=0) * BORROW / 252
