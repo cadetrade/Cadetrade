@@ -344,6 +344,21 @@ def rotation(data: dict, start, cash: float, top: int = 3) -> list:
     return curve
 
 
+def levered(curve, lev: float, rate: float = 0.065, cash: float = 100_000.0) -> list:
+    """La stessa strategia con la leva (conto a margine, leva tenuta costante ogni giorno):
+    ogni giorno guadagni/perdi `lev` volte il movimento e paghi gli interessi sulla parte presa a prestito."""
+    out, eq, prev, dprev = [], cash, None, None
+    for d, v in curve:
+        if prev is not None:
+            r = v / prev - 1
+            days = max(1, (d - dprev).days)
+            eq *= 1 + lev * r - (lev - 1) * rate * days / 365
+            eq = max(eq, 0.0)
+        out.append((d, eq))
+        prev, dprev = v, d
+    return out
+
+
 def _stats(curve, cash):
     peak, dd = cash, 0.0
     for _, v in curve:
@@ -352,15 +367,19 @@ def _stats(curve, cash):
     return (curve[-1][1] / cash - 1) * 100, dd * 100
 
 
-def main_compare(broker, days=365):
-    """Le strade possibili, provate sullo stesso anno."""
-    data = {}
-    for s in CORE:
-        try:
-            data[s] = broker.daily_bars(s, days + 300)
-        except Exception as e:
-            print(f"{s}: dati non disponibili ({e})")
-    today = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None)
+def main_compare(broker, days=365, ago=0, verbose=True, data=None):
+    """Le strade possibili, provate sullo stesso periodo (che finisce `ago` giorni fa)."""
+    if data is None:
+        data = {}
+        for s in CORE:
+            try:
+                data[s] = broker.daily_bars(s, days + ago + 300)
+            except Exception as e:
+                print(f"{s}: dati non disponibili ({e})")
+    today = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None) - pd.Timedelta(days=ago)
+    cut = today.tz_localize("UTC") + pd.Timedelta(days=1)
+    data = {s: df[pd.to_datetime(df.index, utc=True) < cut] for s, df in data.items()}
+    data = {s: df for s, df in data.items() if len(df) > 260}
     start = today - pd.Timedelta(days=days)
     C = 100_000.0
     base_w = {"SPY": 0.42, "QQQ": 0.33, "GLD": 0.25}
@@ -387,6 +406,28 @@ def main_compare(broker, days=365):
         pr, dd = _stats(curve, C)
         extra = f"  trade {r['trade']}, vinti {r['vinti_%']}%" if r else ""
         print(f"{name:55} {pr:+7.2f}%  ({curve[-1][1]:>9,.0f} $)  calo max {dd:6.2f}%{extra}")
+    print("\nCON LA LEVA (margine Alpaca, interessi 6,5% annuo sul prestito, leva tenuta costante):")
+    for key in ("0.", "2. base 80%", "5.", "6."):
+        name = next(n for n in rows if n.startswith(key))
+        for lev in (1.5, 2.0, 3.0):
+            cv = levered(rows[name][0], lev)
+            pr, dd = _stats(cv, C)
+            print(f"  {name[:40]:40} leva {lev:.1f}x  {pr:+8.2f}%  ({cv[-1][1]:>9,.0f} $)  calo max {dd:6.2f}%")
+    print("\nANNO PER ANNO (% di ogni blocco di 12 mesi):")
+    names = list(rows)
+    edges = [start + pd.Timedelta(days=365 * k) for k in range(days // 365 + 1)] + [today + pd.Timedelta(days=1)]
+    edges = sorted(set(e for e in edges if e <= today + pd.Timedelta(days=1)))
+    for name in names:
+        curve = rows[name][0]
+        parts, prev = [], 100_000.0
+        for a0, a1 in zip(edges[:-1], edges[1:]):
+            seg = [v for d, v in curve if a0 <= d < a1]
+            if seg:
+                parts.append(f"{a0.strftime('%m/%y')}-{(a1 - pd.Timedelta(days=1)).strftime('%m/%y')}: {(seg[-1]/prev-1)*100:+6.1f}%")
+                prev = seg[-1]
+        print(f"  {name[:40]:40} " + " | ".join(parts))
+    if not verbose:
+        return rows
     print("\nMESE PER MESE (conto a fine mese):")
     names = list(rows)
     print("mese     " + " ".join(f"{n[:2]:>9}" for n in names))
@@ -400,3 +441,19 @@ def main_compare(broker, days=365):
     for t in b["trades"]:
         print(f"  {t['dentro']} → {t['fuori']}  {t['lato']:5} {t['symbol']:8} {t['pnl_%']:+6.2f}%  {t['pnl_usd']:+9.2f} $  {t['perché']}")
     print("LEZIONI:", *b["lezioni"], sep="\n  ")
+    return rows
+
+
+def main_multi(broker):
+    """Tre anni fino a oggi, e i due anni del ribasso 2022 (nov 2021 - nov 2023)."""
+    data = {}
+    for s in CORE:
+        try:
+            data[s] = broker.daily_bars(s, 365 * 5 + 300)
+        except Exception as e:
+            print(f"{s}: dati non disponibili ({e})")
+    print({s: str(pd.to_datetime(df.index[0]).date()) for s, df in data.items() if len(df)})
+    main_compare(broker, days=365 * 3, verbose=False, data=data)
+    print()
+    ago = (pd.Timestamp.now() - pd.Timestamp("2023-11-10")).days
+    main_compare(broker, days=730, ago=ago, verbose=False, data=data)

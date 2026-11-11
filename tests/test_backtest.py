@@ -43,3 +43,11 @@ def test_compare_pieces_run():
     assert bh and abs(bh[0][1] - 100_000) < 500
     assert backtest.rotation(data, start, 100_000, top=2)
     assert backtest.run(data, start, slow=True, learn=True)["curva"]
+
+
+def test_leverage_doubles_moves_and_charges_interest():
+    d = pd.date_range("2026-01-01", periods=3, freq="D")
+    curve = [(d[0], 100_000.0), (d[1], 110_000.0), (d[2], 99_000.0)]
+    out = backtest.levered(curve, 2.0, rate=0.0)
+    assert round(out[1][1]) == 120_000 and round(out[2][1]) == 96_000
+    assert backtest.levered(curve, 2.0, rate=0.1)[1][1] < 120_000
