@@ -46,7 +46,8 @@ def closes(data: dict) -> pd.DataFrame:
     return px.ffill().loc[days]
 
 
-def targets(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bool) -> pd.DataFrame:
+def targets(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bool,
+            tilt: float = 0.0, dip_syms=("SPY", "QQQ"), cash_sym: str | None = None) -> pd.DataFrame:
     """I pesi decisi ogni sera (riga t = cosa tenere da domani), usando solo i prezzi fino alla sera t.
     È la stessa funzione che usa il bot dal vivo: quello che si prova è quello che gira."""
     rets = px.pct_change().fillna(0.0)
@@ -75,6 +76,17 @@ def targets(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bo
         w["QQQ"] = w["QQQ"] - 0.25 * (1 - bull)
         w["SPY"] = w["SPY"] - 0.25 * (1 - bull)
         w["GLD"] = w["GLD"] + base.get("GLD", 0.0) * (1 - bull)
+    # pesi che seguono il più forte: a inizio mese chi ha fatto meglio negli ultimi 6 mesi pesa di più
+    if tilt and len(base) > 1:
+        r126 = px[list(base)].pct_change(126)
+        first = px.index.to_series().dt.month != px.index.to_series().shift(1).dt.month
+        med = r126.median(axis=1)
+        mult = r126.gt(med, axis=0).astype(float) * (1 + tilt) + r126.le(med, axis=0).astype(float) * (1 - tilt / 2)
+        mult = mult.where(first, np.nan).ffill().fillna(1.0)
+        tw = pd.DataFrame({s: base[s] * mult[s] for s in base})
+        tw = tw.div(tw.sum(axis=1), axis=0)
+        for s in base:
+            w[s] = w[s].where(w[s] == 0, tw[s])
     # leva
     kind, k = lever
     if kind == "fissa":
@@ -89,7 +101,7 @@ def targets(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bo
     w = w.mul(lev, axis=0)
     # compra sul ribasso: S&P e Nasdaq in trend rialzista con RSI(2) sotto 10, si rivende quando RSI(2) supera 70 o dopo 5 giorni
     if dip:
-        for s in ("SPY", "QQQ"):
+        for s in dip_syms:
             r2 = rsi(px[s], 2)
             up = px[s] > ema(px[s], 200)
             on, held, flag = [], 0, False
@@ -102,13 +114,16 @@ def targets(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bo
                 on.append(flag)
             w[s] = w[s] + dip * pd.Series(on, index=px.index, dtype=float)
     gross = w.abs().sum(axis=1)
-    return w.mul((MAX_GROSS / gross.where(gross > 0, 1.0)).clip(upper=1.0), axis=0)   # mai oltre 2x lordo
+    w = w.mul((MAX_GROSS / gross.where(gross > 0, 1.0)).clip(upper=1.0), axis=0)   # mai oltre 2x lordo
+    if cash_sym:   # la liquidità che avanza va in titoli di Stato a breve
+        w[cash_sym] = (1 - w.clip(lower=0).sum(axis=1)).clip(lower=0)
+    return w
 
 
-def simulate(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bool) -> pd.Series:
+def simulate(px: pd.DataFrame, base: dict, lever, bear: str, dip: float, filt: bool, **kw) -> pd.Series:
     """Valore del conto giorno per giorno (parte da 1)."""
     rets = px.pct_change().fillna(0.0)
-    w = targets(px, base, lever, bear, dip, filt)
+    w = targets(px, base, lever, bear, dip, filt, **kw)
     held = w.shift(1).fillna(0.0)
     longs = held.clip(lower=0).sum(axis=1)
     cost_borrow = (longs - 1).clip(lower=0) * BORROW / 252
@@ -189,4 +204,59 @@ def main(broker):
     for col in ("base", "leva", "orso", "ribasso", "filtro200"):
         g = good.groupby(col)[["tutto_cagr", "tutto_dd", "oos_cagr"]].mean().round(1)
         print(f"-- {col} --\n{g.to_string()}")
+    print(flush=True)
+
+
+BASES2 = {
+    "Nasdaq/oro (attuale)": {"QQQ": 0.6, "GLD": 0.4},
+    "Nasdaq/oro/Stato lungo": {"QQQ": 0.5, "GLD": 0.3, "TLT": 0.2},
+    "Nasdaq/oro/Stato/materie": {"QQQ": 0.45, "GLD": 0.25, "TLT": 0.2, "DBC": 0.1},
+    "SPY/QQQ/oro/Stato": {"SPY": 0.25, "QQQ": 0.3, "GLD": 0.25, "TLT": 0.2},
+    "Nasdaq/oro/materie": {"QQQ": 0.55, "GLD": 0.35, "DBC": 0.1},
+}
+
+
+def main2(broker, split="2024-01-01", start="2021-11-01"):
+    """Seconda ricerca: liquidità che rende, più diversificazione, pesi al più forte, acquisti sui cali anche sull'oro."""
+    syms = ("SPY", "QQQ", "GLD", "TLT", "DBC", "BIL")
+    px = closes({s: broker.daily_bars(s, 365 * 6 + 200) for s in syms})
+    print(f"dati dal {px.index[0].date()} al {px.index[-1].date()}")
+    rows = []
+    for (bn, base), lv, dp, tilt, cash, dg in itertools.product(
+            BASES2.items(), [("volat", 0.12), ("volat", 0.15), ("volat", 0.20)], [0.0, 0.3], [0.0, 0.5],
+            [None, "BIL"], [False, True]):
+        if dg and not dp:
+            continue
+        ds = ("SPY", "QQQ", "GLD") if dg else ("SPY", "QQQ")
+        eq = simulate(px, base, lv, "tiene", dp, False, tilt=tilt, dip_syms=ds, cash_sym=cash)
+        eq = eq[eq.index >= start] / eq[eq.index >= start].iloc[0]
+        ins, oos = eq[eq.index < split], eq[eq.index >= split]
+        oos = oos / oos.iloc[0]
+        rows.append({"base": bn, "leva": f"{lv[0]} {lv[1]}", "ribasso": dp, "oro_cali": dg, "inclina": tilt,
+                     "liquidità": cash or "ferma", **{f"tutto_{k}": v for k, v in metrics(eq).items()},
+                     **{f"is_{k}": v for k, v in metrics(ins).items()},
+                     **{f"oos_{k}": v for k, v in metrics(oos).items()}, "anni": yearly(eq)})
+    df = pd.DataFrame(rows)
+
+    def fmt(r):
+        anni = " ".join(f"{y}:{v:+.0f}%" for y, v in r["anni"].items())
+        return (f"{r['base']:26} {r['leva']:11} cali {r['ribasso']:.1f}{'+oro' if r['oro_cali'] else '    '} inclina {r['inclina']:.1f}"
+                f" liq {r['liquidità']:5} | TUTTO {r['tutto_cagr']:+5.1f}%/a calo {r['tutto_dd']:6.1f}% | 21-23 {r['is_cagr']:+5.1f}%"
+                f" calo {r['is_dd']:6.1f}% | 24-26 {r['oos_cagr']:+5.1f}% calo {r['oos_dd']:6.1f}% | {anni}")
+    print("\n=== SISTEMA ATTUALE ===")
+    cur = df[(df.base == "Nasdaq/oro (attuale)") & (df.leva == "volat 0.15") & (df.ribasso == 0.3) & (~df.oro_cali)
+             & (df.inclina == 0) & (df["liquidità"] == "ferma")]
+    for _, r in cur.iterrows():
+        print(fmt(r))
+    df["solido"] = df[["is_cagr", "oos_cagr"]].min(axis=1)
+    print("\n=== I PIÙ SOLIDI (calo max entro 25% in entrambi i periodi) ===")
+    for _, r in df[(df.is_dd >= -25) & (df.oos_dd >= -25)].sort_values("solido", ascending=False).head(15).iterrows():
+        print(fmt(r))
+    print("\n=== SCELTI SOLO SUL 2021-2023 (calo entro 27%) E COME SONO ANDATI DOPO ===")
+    for _, r in df[df.is_dd >= -27].sort_values("is_cagr", ascending=False).head(10).iterrows():
+        print(fmt(r))
+    print("\n=== QUANTO CONTA OGNI PEZZO (media, calo max entro 27%) ===")
+    good = df[df.tutto_dd >= -27]
+    for col in ("base", "leva", "ribasso", "oro_cali", "inclina", "liquidità"):
+        print(f"-- {col} --\n" + good.groupby(col)[["tutto_cagr", "tutto_dd", "is_cagr", "oos_cagr"]].mean().round(1).to_string())
     print(flush=True)

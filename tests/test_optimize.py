@@ -32,3 +32,12 @@ def test_leverage_two_x_roughly_doubles_daily_moves():
     one = optimize.simulate(px, {"SPY": 1.0}, ("fissa", 1.0), "tiene", 0.0, False).pct_change().dropna()
     two = optimize.simulate(px, {"SPY": 1.0}, ("fissa", 2.0), "tiene", 0.0, False).pct_change().dropna()
     assert abs((two.iloc[10:] / one.iloc[10:]).median() - 2) < 0.05
+
+
+def test_cash_etf_and_tilt():
+    d = _data()
+    d["BIL"] = d["MSFT"]
+    px = optimize.closes(d)
+    w = optimize.targets(px, {"QQQ": 0.6, "GLD": 0.4}, ("fissa", 0.5), "tiene", 0.0, False, cash_sym="BIL", tilt=0.5)
+    assert abs((w[["QQQ", "GLD", "BIL"]].sum(axis=1) - 1).iloc[-1]) < 1e-9
+    assert abs(w["QQQ"].iloc[-1] + w["GLD"].iloc[-1] - 0.5) < 1e-9 and w["QQQ"].iloc[-1] != 0.3
