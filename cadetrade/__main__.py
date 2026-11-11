@@ -52,12 +52,12 @@ def build_ctx(args, secrets) -> Ctx:
         broker = AlpacaPaper(secrets["ALPACA_KEY_ID"], secrets["ALPACA_SECRET_KEY"])
         brain = ApiBrain() if args.brain == "api" else ClaudeCodeBrain()
         notifier = Notifier(secrets["TELEGRAM_BOT_TOKEN"], secrets["TELEGRAM_CHAT_ID"])
-    return Ctx(broker=broker, brain=brain, notifier=notifier, state_dir=STATE)
+    return Ctx(broker=broker, brain=brain, notifier=notifier, state_dir=STATE, web_news=not args.fake)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="cadetrade")
-    p.add_argument("cmd", choices=["once", "schedule", "status", "reconcile", "review", "lessons", "backtest"])
+    p.add_argument("cmd", choices=["once", "schedule", "status", "reconcile", "review", "lessons", "backtest", "news"])
     p.add_argument("--slot", help="es. 1540")
     p.add_argument("--force", action="store_true")
     p.add_argument("--fake", action="store_true", help="broker e cervello finti, nessuna rete")
@@ -142,6 +142,14 @@ def main(argv=None):
         from . import backtest
         setup_logging(secrets)
         backtest.main(build_ctx(a, secrets).broker)
+        return 0
+    if a.cmd == "news":   # controllo delle fonti di notizie extra
+        from . import extnews
+        t = now()
+        h, c = extnews.headlines(t), extnews.calendar(t)
+        print(f"notizie macro: {len(h)}"); [print(" ", n["fonte"], "|", n["titolo"]) for n in h[:12]]
+        print(f"calendario USA: {len(c)}"); [print(" ", e["quando"], e["impatto"], e["evento"]) for e in c]
+        print("fonti:", sorted({n["fonte"] for n in h}))
         return 0
     if a.cmd == "lessons":
         from .learning import Journal, stats

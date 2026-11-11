@@ -28,6 +28,7 @@ class Ctx:
     notifier: object
     state_dir: Path
     use_signals: bool = True
+    web_news: bool = False      # feed RSS e calendario macro (spento nei test: niente rete)
     extra: dict = field(default_factory=dict)
 
     @property
@@ -270,6 +271,13 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
                 news = b.news(watch)
             except Exception as e:
                 log.warning("notizie non disponibili: %s", e)
+        macro, cal = [], []
+        if ctx.web_news:
+            from . import extnews
+            try:
+                macro, cal = extnews.headlines(t), extnews.calendar(t)
+            except Exception as e:   # le notizie non fermano mai la sveglia
+                log.warning("notizie web non disponibili: %s", e)
         context = {
             "sveglia": {"run_id": rid, "nome": name_of(hhmm), "ora_roma": t.strftime("%Y-%m-%d %H:%M"),
                         "borsa_usa_aperta": clock["is_open"], "si_puo_entrare": SLOT_BY_HHMM[hhmm].entries},
@@ -278,6 +286,8 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
             "stop_attivi": {k: {"stop": round(r["stop"], 4), "entrata": r["entry"], "massimo": r.get("high"),
                                 "protegge_guadagno": r["stop"] >= r["entry"]} for k, r in records.items()},
             "notizie": news,
+            "notizie_macro": macro,
+            "calendario_macro_usa": cal,
             "ordini_ultime_48h": recent[:30],
             "indicatori": sig,
             "scelti_oggi": picks,
@@ -363,7 +373,7 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
             "orders": results, "rejected": verdict.rejected, "halted": verdict.halted,
             "equity": account_after["equity"], "cash": account_after["cash"], "day_pl": day_pl,
             "missed": missed, "reconciled": reconciled, "picks": picks,
-            "news_n": len(news), "signals_n": len(sig),
+            "news_n": len(news) + len(macro), "signals_n": len(sig),
         }
         store.write(baton)
 
