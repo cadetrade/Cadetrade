@@ -77,6 +77,16 @@ class State:
             self._bars[key] = (time.time(), rows)
         return rows
 
+    def quotes(self) -> dict:
+        """Prezzo e variazione del giorno per il nastro scorrevole (dalle candele in memoria)."""
+        out = {}
+        for sym in CORE:
+            rows = self.bars(sym)
+            if len(rows) >= 2:
+                last, prev = rows[-1]["c"], rows[-2]["c"]
+                out[sym] = {"p": last, "chg": round((last / prev - 1) * 100, 2) if prev else 0.0}
+        return out
+
     def _picks(self) -> set:
         baton = _read_json(self.ctx.state_dir / "baton.json", {}) or {}
         return {p.get("symbol") for p in baton.get("picks") or []}
@@ -108,6 +118,7 @@ class State:
             "lessons": (_read_json(sd / "lessons.json", {}) or {}).get("lessons", []),
             "feed": [{"t": ts, "text": m} for ts, m in list(getattr(self.ctx.notifier, "feed", []))[-40:]],
             "core": CORE,
+            "quotes": self.quotes(),
         }
 
 
