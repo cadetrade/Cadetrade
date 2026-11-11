@@ -34,3 +34,12 @@ def test_learning_only_uses_past_and_logs_lessons():
     a = [t for t in backtest.run(short, pd.Timestamp("2026-06-01"), learn=True)["trades"] if t["fuori"] < "2026-09-25"]
     b = [t for t in res["trades"] if t["fuori"] < "2026-09-25"]
     assert a == b
+
+
+def test_compare_pieces_run():
+    data = {"SPY": _df(0.002, n=400, seed=3), "QQQ": _df(0.001, n=400, seed=4), "GLD": _df(0.0, n=400, seed=5)}
+    start = pd.Timestamp("2026-06-01")
+    bh = backtest.buy_hold(data, {"SPY": 0.5, "QQQ": 0.3, "GLD": 0.2}, start, 100_000)
+    assert bh and abs(bh[0][1] - 100_000) < 500
+    assert backtest.rotation(data, start, 100_000, top=2)
+    assert backtest.run(data, start, slow=True, learn=True)["curva"]

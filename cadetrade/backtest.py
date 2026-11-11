@@ -9,7 +9,7 @@ Tutto il resto è la gabbia vera: stop ad ATR, pareggio a +1R, inseguimento a 2,
 pesi massimi, gruppi, rischio aperto 4%, max 8 posizioni, short coperti dalla liquidità.
 Si decide sulla chiusura del giorno (come la sveglia delle 21:40); gli stop scattano sui minimi/massimi del giorno dopo.
 I titoli scelti per fomo non ci sono: lo screener del passato non si può ricostruire."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
@@ -37,6 +37,8 @@ def _prep(df: pd.DataFrame) -> pd.DataFrame:
     c = df["close"]
     df["e20"], df["e50"], df["rsi"], df["atr"] = ema(c, 20), ema(c, 50), rsi(c), atr(df, 14)
     df["r20"] = c / c.shift(20) - 1
+    df["e100"], df["e200"] = ema(c, 100), ema(c, 200)
+    df["r63"] = c / c.shift(63) - 1
     return df
 
 
@@ -50,7 +52,10 @@ def _wcap(sym):
 
 
 def run(data: dict, start: pd.Timestamp, end: pd.Timestamp | None = None, allow_short: bool = True,
-        cash: float = 100_000.0, learn: bool = False) -> dict:
+        cash: float = 100_000.0, learn: bool = False, slow: bool = False) -> dict:
+    """slow=True: trend lento, si esce solo sotto la EMA100 (-2%), stop a 3,5 ATR e inseguimento a 4 ATR."""
+    cage = replace(CAGE, stop_atr=3.5, max_stop_atr=5.0, trail_atr=4.0, breakeven_r=1.5) if slow else CAGE
+    exit_col, exit_buf = ("e100", 0.02) if slow else ("e50", 0.0)
     data = {s: _prep(df) for s, df in data.items() if len(df) > 60}
     days = sorted({d for df in data.values() for d in df.index if d >= start and (end is None or d <= end)})
     sim = Sim(cash=cash)
@@ -135,7 +140,7 @@ def run(data: dict, start: pd.Timestamp, end: pd.Timestamp | None = None, allow_
                 kind = "stop protezione guadagno" if (rec["stop"] - rec["entry"]) * rec["dir"] >= 0 else "stop loss"
                 close(s, float(row["open"]) if gap else rec["stop"], d, kind)
                 continue
-            trail(rec, float(row["high"] if long_ else row["low"]))
+            trail(rec, float(row["high"] if long_ else row["low"]), cage)
         # 2) alla chiusura: decide il trader a regole, la gabbia filtra
         eq = equity(d)
         for s in list(sim.pos):
@@ -143,8 +148,8 @@ def run(data: dict, start: pd.Timestamp, end: pd.Timestamp | None = None, allow_
             if d not in df.index:
                 continue
             row, long_ = df.loc[d], sim.pos[s]["qty"] > 0
-            eb = L["buf"]
-            if (long_ and row["close"] < row["e50"] * (1 - eb)) or (not long_ and row["close"] > row["e50"] * (1 + eb)):
+            eb = L["buf"] + exit_buf
+            if (long_ and row["close"] < row[exit_col] * (1 - eb)) or (not long_ and row["close"] > row[exit_col] * (1 + eb)):
                 close(s, float(row["close"]), d, "trend girato")
         cands = []
         for s, df in data.items():
@@ -166,7 +171,7 @@ def run(data: dict, start: pd.Timestamp, end: pd.Timestamp | None = None, allow_
                 break
             r = data[s].loc[d]
             px, a = float(r["close"]), float(r["atr"])
-            stop = initial_stop(px, a, None, CAGE, dr)
+            stop = initial_stop(px, a, None, cage, dr)
             dist = abs(px - stop)
             qty = _risk(s) * L["risk"] * eq / dist
             cap = _wcap(s) * eq
@@ -282,3 +287,116 @@ def main_year(broker, days=365):
     print(f"CON pagella SOLO long: {c['profitto_%']:+.2f}% calo max {c['peggior_calo_%']}% trade {c['trade']} vinti {c['vinti_%']}%")
     spy = a["compra_e_tieni_%"].get("SPY")
     print(f"COMPRA E TIENI: SPY {spy:+.2f}%  nucleo a pesi uguali {a['compra_e_tieni_nucleo_%']:+.2f}%", flush=True)
+
+
+def buy_hold(data: dict, weights: dict, start, cash: float, filter200: bool = False) -> list:
+    """Base sempre investita con pesi fissi, ribilanciata ogni mese. Con filter200 un titolo sotto la sua
+    media a 200 giorni a fine mese viene tenuto in liquidità fino al mese dopo (protezione dai crolli lunghi)."""
+    data = {s: _prep(df) for s, df in data.items() if s in weights}
+    days = sorted({d for s in weights for d in data[s].index if d >= start})
+    hold, cashv, curve, month = {}, cash, [], None
+
+    def px(s, d):
+        w = data[s].loc[:d]
+        return float(w["close"].iloc[-1]) if len(w) else None
+
+    for d in days:
+        if d.month != month:   # ribilancio al primo giorno di ogni mese
+            month = d.month
+            tot = cashv + sum(q * px(s, d) for s, q in hold.items())
+            hold, cashv = {}, tot
+            for s, w in weights.items():
+                r = data[s].loc[:d].iloc[-1]
+                if filter200 and r["close"] < r["e200"]:
+                    continue
+                hold[s] = tot * w / float(r["close"]) * (1 - SLIP_STOCK)
+                cashv -= tot * w
+        curve.append((d, cashv + sum(q * px(s, d) for s, q in hold.items())))
+    return curve
+
+
+def rotation(data: dict, start, cash: float, top: int = 3) -> list:
+    """Rotazione mensile: tiene i 3 titoli del nucleo saliti di più negli ultimi 3 mesi, solo se sopra la EMA100."""
+    data = {s: _prep(df) for s, df in data.items()}
+    days = sorted({d for df in data.values() for d in df.index if d >= start})
+    hold, cashv, curve, month = {}, cash, [], None
+
+    def px(s, d):
+        w = data[s].loc[:d]
+        return float(w["close"].iloc[-1]) if len(w) else 0.0
+
+    for d in days:
+        if d.month != month:
+            month = d.month
+            tot = cashv + sum(q * px(s, d) for s, q in hold.items())
+            score = []
+            for s, df in data.items():
+                r = df.loc[:d].iloc[-1]
+                if r["close"] > r["e100"] and r["r63"] > 0:
+                    score.append((r["r63"], s))
+            pick = [s for _, s in sorted(score, reverse=True)[:top]]
+            slip = sum(abs(q) * px(s, d) for s, q in hold.items() if s not in pick) * SLIP_STOCK
+            hold, cashv = {}, tot - slip
+            for s in pick:
+                hold[s] = tot / top / px(s, d)
+                cashv -= tot / top
+        curve.append((d, cashv + sum(q * px(s, d) for s, q in hold.items())))
+    return curve
+
+
+def _stats(curve, cash):
+    peak, dd = cash, 0.0
+    for _, v in curve:
+        peak = max(peak, v)
+        dd = min(dd, v / peak - 1)
+    return (curve[-1][1] / cash - 1) * 100, dd * 100
+
+
+def main_compare(broker, days=365):
+    """Le strade possibili, provate sullo stesso anno."""
+    data = {}
+    for s in CORE:
+        try:
+            data[s] = broker.daily_bars(s, days + 300)
+        except Exception as e:
+            print(f"{s}: dati non disponibili ({e})")
+    today = pd.Timestamp.now(tz="America/New_York").normalize().tz_localize(None)
+    start = today - pd.Timedelta(days=days)
+    C = 100_000.0
+    base_w = {"SPY": 0.42, "QQQ": 0.33, "GLD": 0.25}
+    rows = {}
+    a = run(data, start, learn=True)
+    rows["0. attuale (trend veloce, stop stretti)"] = (a["curva"], a)
+    b = run(data, start, learn=True, slow=True)
+    rows["1. trend lento, stop larghi"] = (b["curva"], b)
+    for frac in (0.6, 0.8):
+        base = buy_hold(data, base_w, start, C * frac)
+        sat = run(data, start, cash=C * (1 - frac), learn=True, slow=True)
+        bm = dict(base)
+        curve = [(d, bm.get(d, base[-1][1]) + v) for d, v in sat["curva"]]
+        rows[f"2. base {round(frac*100)}% ferma + bot lento sul {round((1-frac)*100)}%"] = (curve, sat)
+        base_f = buy_hold(data, base_w, start, C * frac, filter200=True)
+        bm = dict(base_f)
+        curve = [(d, bm.get(d, base_f[-1][1]) + v) for d, v in sat["curva"]]
+        rows[f"3. base {round(frac*100)}% con freno EMA200 + bot lento sul {round((1-frac)*100)}%"] = (curve, sat)
+    rows["4. rotazione mensile: i 3 più forti"] = (rotation(data, start, C), None)
+    rows["5. solo base ferma (SPY/QQQ/oro)"] = (buy_hold(data, base_w, start, C), None)
+    rows["6. compra e tieni SPY"] = (buy_hold(data, {"SPY": 1.0}, start, C), None)
+    print(f"=== CONFRONTO STRATEGIE: {start.date()} → {today.date()} (100.000 $) ===")
+    for name, (curve, r) in rows.items():
+        pr, dd = _stats(curve, C)
+        extra = f"  trade {r['trade']}, vinti {r['vinti_%']}%" if r else ""
+        print(f"{name:55} {pr:+7.2f}%  ({curve[-1][1]:>9,.0f} $)  calo max {dd:6.2f}%{extra}")
+    print("\nMESE PER MESE (conto a fine mese):")
+    names = list(rows)
+    print("mese     " + " ".join(f"{n[:2]:>9}" for n in names))
+    months = {}
+    for i, n in enumerate(names):
+        for d, v in rows[n][0]:
+            months.setdefault(d.strftime("%Y-%m"), {})[i] = v
+    for m, vals in months.items():
+        print(m + "  " + " ".join(f"{vals.get(i, 0):>9,.0f}" for i in range(len(names))))
+    print("\nTRADE DEL BOT LENTO (strategia 1):")
+    for t in b["trades"]:
+        print(f"  {t['dentro']} → {t['fuori']}  {t['lato']:5} {t['symbol']:8} {t['pnl_%']:+6.2f}%  {t['pnl_usd']:+9.2f} $  {t['perché']}")
+    print("LEZIONI:", *b["lezioni"], sep="\n  ")
