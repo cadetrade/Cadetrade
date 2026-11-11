@@ -57,7 +57,7 @@ def build_ctx(args, secrets) -> Ctx:
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="cadetrade")
-    p.add_argument("cmd", choices=["once", "schedule", "status", "reconcile", "review", "lessons", "backtest", "backtest-anno", "backtest-confronto", "backtest-3anni", "ottimizza", "ottimizza2", "news"])
+    p.add_argument("cmd", choices=["once", "schedule", "status", "reconcile", "review", "lessons", "backtest", "backtest-anno", "backtest-confronto", "backtest-3anni", "ottimizza", "ottimizza2", "armageddon", "news"])
     p.add_argument("--slot", help="es. 1540")
     p.add_argument("--force", action="store_true")
     p.add_argument("--fake", action="store_true", help="broker e cervello finti, nessuna rete")
@@ -160,6 +160,11 @@ def main(argv=None):
         from . import backtest
         setup_logging(secrets)
         backtest.main(build_ctx(a, secrets).broker)
+        return 0
+    if a.cmd == "armageddon":   # salvadanaio: pochi colpi all'anno con opzioni call, perdita massima fissata
+        from .research import armageddon
+        setup_logging(secrets)
+        armageddon.main(build_ctx(a, secrets).broker)
         return 0
     if a.cmd == "ottimizza2":   # seconda ricerca: liquidità, diversificazione, pesi al più forte
         from .research import optimize
