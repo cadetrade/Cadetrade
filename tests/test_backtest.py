@@ -22,3 +22,15 @@ def test_uptrend_makes_money_downtrend_short_makes_money():
     longonly = backtest.run(data, start, allow_short=False)
     assert all(t["lato"] == "long" for t in longonly["trades"])
     assert "SPY" in res["compra_e_tieni_%"] and backtest.report(res, "x")
+
+
+def test_learning_only_uses_past_and_logs_lessons():
+    data = {"SPY": _df(0.0, n=400, seed=3), "QQQ": _df(0.0, n=400, seed=4), "GLD": _df(0.0, n=400, seed=5)}
+    res = backtest.run(data, pd.Timestamp("2026-06-01"), learn=True)
+    assert isinstance(res["lezioni"], list) and res["curva"]
+    # cambiare il futuro non cambia le decisioni prese prima
+    cut = pd.Timestamp("2026-10-01")
+    short = {k: v[v.index < cut.tz_localize("UTC")] for k, v in data.items()}
+    a = [t for t in backtest.run(short, pd.Timestamp("2026-06-01"), learn=True)["trades"] if t["fuori"] < "2026-09-25"]
+    b = [t for t in res["trades"] if t["fuori"] < "2026-09-25"]
+    assert a == b
