@@ -51,3 +51,11 @@ def test_leverage_doubles_moves_and_charges_interest():
     out = backtest.levered(curve, 2.0, rate=0.0)
     assert round(out[1][1]) == 120_000 and round(out[2][1]) == 96_000
     assert backtest.levered(curve, 2.0, rate=0.1)[1][1] < 120_000
+
+
+def test_merge_forward_fills_base_on_weekends():
+    d = pd.date_range("2026-01-02", periods=4, freq="D")   # ven, sab, dom, lun
+    base = [(d[0], 60_000.0), (d[3], 61_000.0)]
+    sat = [(x, 40_000.0) for x in d]
+    out = backtest._merge(base, sat)
+    assert [v for _, v in out] == [100_000.0, 100_000.0, 100_000.0, 101_000.0]

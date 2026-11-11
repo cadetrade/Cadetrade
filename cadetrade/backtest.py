@@ -359,6 +359,18 @@ def levered(curve, lev: float, rate: float = 0.065, cash: float = 100_000.0) -> 
     return out
 
 
+def _merge(base: list, sat: list) -> list:
+    """Somma base e bot giorno per giorno. Nei giorni senza borsa (weekend, per le crypto) la base vale
+    quanto all'ultima chiusura: mai un valore di un altro giorno."""
+    bm, out, i, lastb = base, [], 0, base[0][1]
+    for d, v in sat:
+        while i < len(bm) and bm[i][0] <= d:
+            lastb = bm[i][1]
+            i += 1
+        out.append((d, lastb + v))
+    return out
+
+
 def _stats(curve, cash):
     peak, dd = cash, 0.0
     for _, v in curve:
@@ -391,12 +403,10 @@ def main_compare(broker, days=365, ago=0, verbose=True, data=None):
     for frac in (0.6, 0.8):
         base = buy_hold(data, base_w, start, C * frac)
         sat = run(data, start, cash=C * (1 - frac), learn=True, slow=True)
-        bm = dict(base)
-        curve = [(d, bm.get(d, base[-1][1]) + v) for d, v in sat["curva"]]
+        curve = _merge(base, sat["curva"])
         rows[f"2. base {round(frac*100)}% ferma + bot lento sul {round((1-frac)*100)}%"] = (curve, sat)
         base_f = buy_hold(data, base_w, start, C * frac, filter200=True)
-        bm = dict(base_f)
-        curve = [(d, bm.get(d, base_f[-1][1]) + v) for d, v in sat["curva"]]
+        curve = _merge(base_f, sat["curva"])
         rows[f"3. base {round(frac*100)}% con freno EMA200 + bot lento sul {round((1-frac)*100)}%"] = (curve, sat)
     rows["4. rotazione mensile: i 3 più forti"] = (rotation(data, start, C), None)
     rows["5. solo base ferma (SPY/QQQ/oro)"] = (buy_hold(data, base_w, start, C), None)
