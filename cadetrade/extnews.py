@@ -18,7 +18,8 @@ FEEDS = {
     "Investing.com crypto": "https://www.investing.com/rss/news_301.rss",
     "CNBC mercati": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
     "CNBC economia": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "MarketWatch mercati": "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
+    "Yahoo Finance": "https://finance.yahoo.com/news/rssindex",
 }
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) cadetrade-rss/1.0", "Accept": "*/*"}
