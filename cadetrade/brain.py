@@ -17,7 +17,7 @@ SCHEMA = {
         "orders": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["symbol", "side", "qty", "why"],
-            "properties": {"symbol": {"type": "string"}, "side": {"type": "string", "enum": ["buy", "sell"]},
+            "properties": {"symbol": {"type": "string"}, "side": {"type": "string", "enum": ["buy", "sell", "short", "cover"]},
                            "qty": {"type": "number"}, "why": {"type": "string"},
                            "stop": {"type": "number"}}}},
         "reasoning": {"type": "string"},
@@ -51,10 +51,15 @@ Regole che il codice applica comunque, qualunque cosa tu proponga (proporre ordi
   QQQ e SPY insieme massimo {int(CAGE.groups[0][2]*100)}% (sono quasi la stessa scommessa); QQQ, SPY e le 4 big tech insieme
   massimo {int(CAGE.groups[1][2]*100)}% (le big tech pesano già molto negli indici); crypto in totale massimo {int(CAGE.max_crypto_weight*100)}%;
   non serve avere tutto: scegli le occasioni migliori del nucleo, non comprarle tutte;
-- niente short, niente leva; azioni intere, crypto anche frazionarie; nessun ordine nel briefing o sui mercati chiusi;
+- SHORT: per guadagnare dal ribasso usi side "short" (apre) e "cover" (chiude). "sell" chiude solo un acquisto.
+  Short ammessi solo su SPY, QQQ, GLD, MSFT, AAPL, NVDA, AMZN, solo nelle sveglie di entrata, solo se il titolo è sotto
+  la media a 50 giorni (meglio anche sotto la EMA200). Lo stop sta SOPRA il prezzo (campo "stop" = prezzo a cui hai torto),
+  rischio 0,5% del conto, tutti gli short insieme massimo 30%. Niente short su crypto o titoli scelti per fomo.
+  Uno short perde se il prezzo sale: entra sui rimbalzi verso le medie in trend ribassista, non dopo un crollo;
+- niente leva; azioni intere, crypto anche frazionarie; nessun ordine nel briefing o sui mercati chiusi;
   nessun riacquisto il giorno stesso di un titolo chiuso dallo stop.
 
-Metodo: entra a favore del trend (sopra la EMA50, meglio anche sopra la EMA200) e su ritracciamenti, non sui massimi.
+Metodo: entra a favore del trend (acquisti sopra la EMA50, short sotto) e su ritracciamenti, non sugli estremi.
 Le notizie servono a capire il contesto e i rischi (dati macro, Fed, risultati trimestrali): non comprare un titolo il giorno
 prima dei suoi risultati, e una notizia da sola non è un motivo per entrare. La liquidità è una posizione legittima.
 Il tuo obiettivo non è fare tanti trade ma battere nel tempo due benchmark semplici: comprare SPY e tenerlo, e comprare il nucleo
@@ -63,7 +68,7 @@ Nel contesto trovi le "lezioni_imparate" dalle tue pagelle settimanali e l'"espe
 i dati di oggi non le smentiscano chiaramente (in quel caso scrivilo nel reasoning). I titoli scelti oggi sono un'opzione,
 non un obbligo: la fomo del mercato non è una buona ragione da sola.
 
-Rispondi SOLO con un oggetto JSON: {{"orders":[{{"symbol","side":"buy"|"sell","qty",numero,"stop":prezzo (solo per buy),"why"}}],
+Rispondi SOLO con un oggetto JSON: {{"orders":[{{"symbol","side":"buy"|"sell"|"short"|"cover","qty",numero,"stop":prezzo (per buy e short),"why"}}],
 "reasoning":"3-5 frasi","planNext":"cosa controllare alla prossima sveglia"}}. Nessun testo fuori dal JSON."""
 
 
@@ -84,7 +89,7 @@ def validate(obj) -> dict:
     for o in obj["orders"]:
         if not isinstance(o, dict) or not {"symbol", "side", "qty", "why"} <= o.keys():
             raise BrainError(f"ordine malformato: {o}")
-        if o["side"] not in ("buy", "sell"):
+        if o["side"] not in ("buy", "sell", "short", "cover"):
             raise BrainError(f"lato non valido: {o['side']}")
         qty = o["qty"]
         if isinstance(qty, bool) or not isinstance(qty, (int, float)) or not qty > 0 or qty != qty:

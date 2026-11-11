@@ -120,7 +120,7 @@ def test_crypto_cap_and_whole_shares_and_no_short(ctx):
     reasons = {r["symbol"]: r["reason"] for r in v.rejected}
     assert "crypto oltre" in reasons["ETH/USD"]
     assert reasons["SPY"] == "solo azioni intere"
-    assert "niente short" in reasons["GLD"]
+    assert "nessun acquisto da vendere" in reasons["GLD"]
 
 
 def test_briefing_sends_no_orders_but_crypto_stop_still_runs(tmp_path):

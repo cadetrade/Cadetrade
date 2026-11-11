@@ -35,38 +35,40 @@ class Journal:
             if r["outcome"] != "inviato":
                 continue
             sym = r["symbol"]
-            if r["side"] == "buy":
+            if r["side"] in ("buy", "short"):
                 th = theses.get(sym)
                 if not th:
                     theses[sym] = {"why": r["why"], "since": t.isoformat(), "entry": prices.get(sym),
-                                   "kind": "nucleo" if sym in CORE else "scelto"}
+                                   "kind": "nucleo" if sym in CORE else "scelto", "short": r["side"] == "short"}
                 continue
             pos = positions.get(sym)
             if not pos:
                 continue
+            d = -1 if r["side"] == "cover" else 1
             exit_px = prices.get(sym) or pos["price"]
             th = theses.get(sym, {})
             row = {"ts": t.isoformat(), "symbol": sym, "kind": th.get("kind", "nucleo" if sym in CORE else "scelto"),
                    "qty": r["qty"], "entry": pos["avg_entry"], "exit": exit_px,
-                   "pnl_%": round((exit_px / pos["avg_entry"] - 1) * 100, 2),
-                   "pnl_usd": round((exit_px - pos["avg_entry"]) * r["qty"], 2),
+                   "pnl_%": round((exit_px / pos["avg_entry"] - 1) * 100 * d, 2),
+                   "pnl_usd": round((exit_px - pos["avg_entry"]) * r["qty"] * d, 2),
                    "since": th.get("since"), "thesis": th.get("why", ""),
-                   "exit_reason": r["why"], "stop": bool(r.get("forced"))}
+                   "exit_reason": r["why"], "stop": bool(r.get("forced")), "short": d < 0}
             self.trades.parent.mkdir(parents=True, exist_ok=True)
             with self.trades.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            if r["qty"] >= pos["qty"] - 1e-9:
+            if r["qty"] >= abs(pos["qty"]) - 1e-9:
                 theses.pop(sym, None)
         _atomic_write(self.theses, theses)
 
-    def record_close(self, sym: str, qty: float, entry: float, exit_px: float, why: str, forced: bool, t: datetime) -> None:
+    def record_close(self, sym: str, qty: float, entry: float, exit_px: float, why: str, forced: bool, t: datetime,
+                     d: int = 1) -> None:
         """Chiusura avvenuta fuori da una sveglia (stop eseguito dal broker)."""
         theses = self._load_theses()
         th = theses.pop(sym, {})
         row = {"ts": t.isoformat(), "symbol": sym, "kind": th.get("kind", "nucleo" if sym in CORE else "scelto"),
-               "qty": qty, "entry": entry, "exit": exit_px, "pnl_%": round((exit_px / entry - 1) * 100, 2),
-               "pnl_usd": round((exit_px - entry) * qty, 2), "since": th.get("since"), "thesis": th.get("why", ""),
-               "exit_reason": why, "stop": forced}
+               "qty": qty, "entry": entry, "exit": exit_px, "pnl_%": round((exit_px / entry - 1) * 100 * d, 2),
+               "pnl_usd": round((exit_px - entry) * qty * d, 2), "since": th.get("since"), "thesis": th.get("why", ""),
+               "exit_reason": why, "stop": forced, "short": d < 0}
         self.trades.parent.mkdir(parents=True, exist_ok=True)
         with self.trades.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

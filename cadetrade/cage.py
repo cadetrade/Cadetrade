@@ -2,8 +2,8 @@
 import math
 from dataclasses import dataclass, field
 
-from .config import CAGE, SINGLE_STOCKS, SLOT_BY_HHMM, UNIVERSE, Cage, is_crypto
-from .stops import forced_stops, initial_stop
+from .config import CAGE, SHORTABLE, SINGLE_STOCKS, SLOT_BY_HHMM, UNIVERSE, Cage, is_crypto
+from .stops import forced_stops, initial_stop, open_risk as _open_risk
 
 
 @dataclass
@@ -23,8 +23,7 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
     atr, trend, pick_blocked = atr or {}, trend or {}, pick_blocked or {}
     records = stops or {}
     # rischio già aperto: quanto si perderebbe se scattassero tutti gli stop adesso
-    open_risk = sum(max(0.0, (p["price"] - records[s]["stop"]) * p["qty"])
-                    for s, p in positions.items() if s in records and p["qty"] > 0)
+    open_risk = _open_risk(positions, records)
     v = Verdict()
     buyable = set(UNIVERSE) | set(picks)
     slot = SLOT_BY_HHMM[slot_hhmm]
@@ -44,8 +43,8 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
     def reject(o, reason):
         v.rejected.append({"symbol": o["symbol"], "side": o["side"], "qty": o.get("qty"), "reason": reason})
 
-    held = {s: p["qty"] for s, p in positions.items() if p["qty"] > 0}
-    value = {s: p["market_value"] for s, p in positions.items()}
+    held = {s: p["qty"] for s, p in positions.items() if p["qty"] != 0}   # negativa per gli short
+    value = {s: abs(p["market_value"]) for s, p in positions.items()}     # peso lordo, long o short
 
     # 1) gli stop vengono prima di tutto e non contano nel limite di ordini
     stops = forced_stops(positions, stops, cage)
@@ -57,10 +56,12 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
         else:
             reject(o, "stop da eseguire ma mercato chiuso: riprovo alla prossima sveglia")
 
-    # 2) le proposte del modello: prima le vendite (liberano spazio), poi gli acquisti
-    for o in sorted(proposed, key=lambda o: o["side"] != "sell"):
+    # 2) le proposte del modello: prima le chiusure (liberano spazio), poi le aperture
+    for o in sorted(proposed, key=lambda o: o["side"] not in ("sell", "cover")):
         sym, side, qty = o["symbol"], o["side"], o["qty"]
-        if sym not in buyable and not (side == "sell" and sym in positions):
+        if side == "short" and not (cage.allow_short and sym in SHORTABLE):
+            reject(o, "short ammessi solo su " + ", ".join(SHORTABLE)); continue
+        if sym not in buyable and not (side in ("sell", "cover") and sym in positions):
             reject(o, "non è più tra le scelte di oggi: si può solo vendere" if sym in positions else "fuori universo"); continue
         if sym in stop_syms:
             reject(o, "già venduto dallo stop"); continue
@@ -80,34 +81,51 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
         if side == "sell":
             have = held.get(sym, 0.0)
             if have <= 0:
-                reject(o, "niente short: posizione assente"); continue
+                reject(o, "nessun acquisto da vendere (per scommettere al ribasso si usa short)"); continue
             qty = min(qty, have)
             held[sym] = have - qty
             value[sym] = held[sym] * price
             cash += qty * price
             v.accepted.append({**o, "qty": qty, "forced": False})
             continue
-        # acquisti
+        if side == "cover":
+            have = -held.get(sym, 0.0)
+            if have <= 0:
+                reject(o, "nessuno short da ricoprire"); continue
+            qty = min(qty, have)
+            held[sym] = -(have - qty)
+            value[sym] = (have - qty) * price
+            v.accepted.append({**o, "qty": qty, "forced": False})
+            continue
+        d = 1 if side == "buy" else -1
+        # aperture: acquisti (buy) e short
+        if d < 0 and held.get(sym, 0) > 0:
+            reject(o, "c'è un acquisto aperto: prima vendi, poi eventualmente short"); continue
+        if d > 0 and held.get(sym, 0) < 0:
+            reject(o, "c'è uno short aperto: prima ricopri (cover)"); continue
         if not slot.entries:
             reject(o, f"sveglia {slot.name}: si entra solo all'apertura (15:40) e alla chiusura (21:40)"); continue
         if v.halted:
             reject(o, v.halted); continue
         if sym in pick_blocked:
             reject(o, pick_blocked[sym]); continue
-        if cage.trend_filter and trend.get(sym) is False:
+        if cage.trend_filter and d > 0 and trend.get(sym) is False:
             reject(o, "sotto la media a 50 giorni: niente acquisti contro il trend"); continue
+        if d < 0 and trend.get(sym) is not False:
+            reject(o, "short solo in trend ribassista (sotto la media a 50 giorni)"); continue
         if sym in stopped_today:
             reject(o, "chiuso dallo stop oggi: niente riacquisto fino a domani"); continue
         # la quantità la decide il rischio: se scatta lo stop si perde al massimo lo 0,75% del conto (0,4% sui scelti)
-        stop_px = initial_stop(price, atr.get(sym), o.get("stop"), cage)
-        risk_pct = (cage.stock_risk_per_trade if sym in SINGLE_STOCKS else
+        stop_px = initial_stop(price, atr.get(sym), o.get("stop"), cage, d)
+        per_unit = abs(price - stop_px)
+        risk_pct = (cage.short_risk_per_trade if d < 0 else cage.stock_risk_per_trade if sym in SINGLE_STOCKS else
                     cage.risk_per_trade if sym in UNIVERSE else cage.pick_risk_per_trade)
-        max_qty = equity * risk_pct / (price - stop_px)
+        max_qty = equity * risk_pct / per_unit
         if not is_crypto(sym):
             max_qty = math.floor(max_qty)
         room = equity * cage.max_open_risk - open_risk   # tetto al rischio totale aperto
-        if room / (price - stop_px) < max_qty:
-            max_qty = room / (price - stop_px)
+        if room / per_unit < max_qty:
+            max_qty = room / per_unit
             if not is_crypto(sym):
                 max_qty = math.floor(max_qty)
             if max_qty <= 0:
@@ -121,10 +139,14 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
         notional = qty * price
         if notional < cage.min_order_usd:
             reject(o, f"ordine sotto {cage.min_order_usd:.0f} $"); continue
-        if sym not in held and len([s for s, q in held.items() if q > 0]) >= cage.max_positions:
+        if sym not in held and len([s for s, q in held.items() if q != 0]) >= cage.max_positions:
             reject(o, f"già {cage.max_positions} posizioni"); continue
         if sym not in buyable:
             reject(o, "non è più tra le scelte di oggi: si può solo vendere"); continue
+        if d < 0:
+            sw = (sum(value.get(s, 0.0) for s, q in held.items() if q < 0) + notional) / equity
+            if sw > cage.max_short_weight + 1e-9:
+                reject(o, f"short oltre il {int(cage.max_short_weight*100)}% del conto: sarebbero il {sw*100:.1f}%"); continue
         cap = (cage.max_stock_weight if sym in SINGLE_STOCKS else
                cage.max_weight if sym in UNIVERSE else cage.max_pick_weight)
         new_weight = (value.get(sym, 0.0) + notional) / equity
@@ -145,9 +167,9 @@ def review(proposed: list[dict], *, slot_hhmm: str, account: dict, positions: di
             continue
         if notional > cash:
             reject(o, "liquidità insufficiente: niente leva"); continue
-        cash -= notional
-        open_risk += (price - stop_px) * qty
-        held[sym] = held.get(sym, 0.0) + qty
+        cash -= notional   # anche lo short impegna liquidità pari al suo valore: così non c'è leva
+        open_risk += per_unit * qty
+        held[sym] = held.get(sym, 0.0) + d * qty
         value[sym] = value.get(sym, 0.0) + notional
         v.accepted.append({**o, "qty": qty, "forced": False, "stop": stop_px, "atr": atr.get(sym),
                            "why": o["why"] + sized})

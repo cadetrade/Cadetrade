@@ -137,7 +137,7 @@ def test_malformed_brain_answers(tmp_path):
     bad = ['{"orders": [{"symbol": "SPY", "side": "buy"',                                    # troncato
            '{"orders": [], "reasoning": "x"}',                                                # campo mancante
            '{"orders": [{"symbol":"SPY","side":"buy","qty":-5,"why":""}], "reasoning":"x","planNext":"y"}',  # negativa
-           '{"orders": [{"symbol":"SPY","side":"short","qty":5,"why":""}], "reasoning":"x","planNext":"y"}',
+           '{"orders": [{"symbol":"SPY","side":"vendi","qty":5,"why":""}], "reasoning":"x","planNext":"y"}',
            'non ho voglia di rispondere in JSON']
     for i, text in enumerate(bad):
         ctx = make_ctx(tmp_path / f"s{i}", FakeBrain(text))

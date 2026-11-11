@@ -61,8 +61,8 @@ def load_risk(ctx) -> dict:
 
 
 def save_risk(ctx, r: dict) -> None:
-    today = f"{now():%Y-%m-%d}"
-    r["stopped"] = {d: s for d, s in r.get("stopped", {}).items() if d >= today}   # tiene solo oggi
+    days = sorted(r.get("stopped", {}))
+    r["stopped"] = {d: r["stopped"][d] for d in days[-1:]}   # tiene solo il giorno più recente
     _atomic_write(_risk_path(ctx), r)
 
 
@@ -85,10 +85,11 @@ def send_order(ctx, rid: str, o: dict) -> dict:
             return {**rec, "outcome": "rifiutato", "reason": "mercato chiuso al momento dell'invio"}
     except BrokerUnavailable as e:
         return {**rec, "outcome": "rifiutato", "reason": f"broker non raggiungibile prima dell'invio: {e}"}
-    if o["side"] == "sell":
+    if o["side"] in ("sell", "cover"):
         _cancel_broker_stops(ctx, o["symbol"])
+    broker_side = {"short": "sell", "cover": "buy"}.get(o["side"], o["side"])   # sul broker short = vendi, cover = compra
     try:
-        res = b.submit(o["symbol"], o["side"], o["qty"], cid)
+        res = b.submit(o["symbol"], broker_side, o["qty"], cid)
         log.info("inviato %s · %s · %s", cid, o["qty"], res.get("status"))
         return {**rec, "outcome": "inviato", "status": res.get("status")}
     except DuplicateOrder:
@@ -140,13 +141,18 @@ def sync_broker_stops(ctx, positions: dict, records: dict, alarm_run: str | None
                     b.cancel(o["id"])
         for sym, p in positions.items():
             rec = records.get(sym)
-            if is_crypto(sym) or not rec:
+            if is_crypto(sym) or not rec or p["qty"] == 0:
                 continue
-            qty = math.floor(p["qty"] + 1e-9)
+            d = 1 if p["qty"] > 0 else -1
+            side = "sell" if d > 0 else "buy"
+            qty = math.floor(abs(p["qty"]) + 1e-9)
             stop = round(rec["stop"], 2)
-            if qty < 1 or p["price"] <= stop:
-                continue   # sotto lo stop ci pensa il guardiano con un ordine a mercato
+            if qty < 1 or (p["price"] - stop) * d <= 0:
+                continue   # oltre lo stop ci pensa il guardiano con un ordine a mercato
             orders = by_sym.get(sym, [])
+            for o in [o for o in orders if o.get("side", "sell") != side]:
+                b.cancel(o["id"])
+            orders = [o for o in orders if o.get("side", "sell") == side]
             for o in orders[1:]:
                 b.cancel(o["id"])
             if orders:
@@ -155,8 +161,8 @@ def sync_broker_stops(ctx, positions: dict, records: dict, alarm_run: str | None
                     b.replace_stop(o["id"], qty, stop)
                     log.info("stop %s spostato a %.2f (%d pezzi)", sym, stop, qty)
             else:
-                b.submit_stop(sym, qty, stop, f"stop-{sym}-{int(time.time() * 1000)}")
-                log.info("stop %s piazzato sul broker a %.2f (%d pezzi)", sym, stop, qty)
+                b.submit_stop(sym, qty, stop, f"stop-{sym}-{int(time.time() * 1000)}", side)
+                log.info("stop %s piazzato sul broker a %.2f (%d pezzi, %s)", sym, stop, qty, side)
     except (BrokerUnavailable, BrokerRejected) as e:
         log.warning("stop sul broker non allineati: %s (riprovo al prossimo giro)", e)
         if alarm_run:   # dalla sveglia lo si dice anche su Telegram; il guardiano riprova in silenzio
@@ -176,8 +182,9 @@ def collect_stop_fills(ctx, records: dict, positions: dict, recent: list, risk: 
         seen.add(cid)
         px = o.get("filled_avg_price") or 0.0
         if rec and px:
+            d = rec.get("dir", 1)
             Journal(ctx.state_dir).record_close(sym, o["qty"], rec["entry"], px, f"stop sul broker a {rec['stop']:.2f}",
-                                                rec["stop"] < rec["entry"], t)
+                                                (rec["stop"] - rec["entry"]) * d < 0, t, d)
         out.append({"symbol": sym, "qty": o["qty"], "price": px})
     risk["stop_fills_seen"] = sorted(seen)[-200:]
     return out
@@ -312,10 +319,11 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
         results = []
         for o in verdict.accepted:
             r = send_order(ctx, rid, o)
-            if o["side"] == "buy":
+            if o["side"] in ("buy", "short"):
                 r["stop"] = o.get("stop")
                 if r["outcome"] == "inviato" and o["symbol"] not in records and o.get("stop"):
-                    records[o["symbol"]] = {**new_record(prices[o["symbol"]], o["stop"], o.get("atr")),
+                    d = 1 if o["side"] == "buy" else -1
+                    records[o["symbol"]] = {**new_record(prices[o["symbol"]], o["stop"], o.get("atr"), d),
                                             "pending_since": t.isoformat()}
             results.append(r)
         journal.record(results, positions, prices, t, pick_syms)
@@ -360,7 +368,8 @@ def run_wakeup(ctx: Ctx, hhmm: str, at: datetime | None = None, force: bool = Fa
         store.write(baton)
 
         def line(r):
-            verb = "comprato" if r["side"] == "buy" else "venduto"
+            verb = {"buy": "comprato", "sell": "venduto", "short": "venduto allo scoperto (short)",
+                    "cover": "ricoperto lo short"}.get(r["side"], r["side"])
             if r["outcome"] == "inviato":
                 tail = ""
             elif r["outcome"] == "già inviato":

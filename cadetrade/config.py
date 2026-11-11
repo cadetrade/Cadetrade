@@ -20,6 +20,8 @@ CORE = {
     "AMZN": "Amazon",
 }
 UNIVERSE = list(CORE)
+# si possono vendere allo scoperto (short) solo questi: liquidissimi e facili da prendere in prestito
+SHORTABLE = ("SPY", "QQQ", "GLD", "MSFT", "AAPL", "NVDA", "AMZN")
 # azioni singole del nucleo: più volatili di un indice, quindi peso e rischio più bassi
 SINGLE_STOCKS = ("MSFT", "AAPL", "NVDA", "AMZN")
 
@@ -88,7 +90,10 @@ class Cage:
     breakeven_r: float = 1.0
     trail_atr: float = 2.5
     max_open_risk: float = 0.04       # somma delle perdite se scattassero TUTTI gli stop: max 4% del conto
-    trend_filter: bool = True         # niente acquisti sotto la media a 50 giorni
+    trend_filter: bool = True         # niente acquisti sotto la media a 50 giorni (e niente short sopra)
+    allow_short: bool = True
+    short_risk_per_trade: float = 0.005  # short: 0,5% del conto se scatta lo stop
+    max_short_weight: float = 0.30    # tutti gli short insieme
     daily_loss_halt: float = -0.03    # P&L del giorno sotto -3%: niente acquisti nuovi fino a domani
     max_drawdown: float = -0.15       # dal massimo storico del conto: solo vendite, serve un umano
     max_orders_per_run: int = 6

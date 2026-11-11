@@ -104,11 +104,12 @@ class AlpacaPaper:
     def open_stops(self) -> list[dict]:
         rows = self._get("/v2/orders", status="open", limit=500) or []
         return [{"id": o["id"], "client_order_id": o.get("client_order_id"), "symbol": norm(o["symbol"]),
-                 "qty": float(o.get("qty") or 0), "stop_price": float(o["stop_price"])}
-                for o in rows if o.get("type") == "stop" and o.get("side") == "sell" and o.get("stop_price")]
+                 "qty": float(o.get("qty") or 0), "stop_price": float(o["stop_price"]), "side": o.get("side")}
+                for o in rows if o.get("type") == "stop" and o.get("stop_price")]
 
-    def submit_stop(self, symbol: str, qty: float, stop_price: float, client_order_id: str) -> dict:
-        body = {"symbol": symbol, "qty": str(int(qty)), "side": "sell", "type": "stop", "time_in_force": "gtc",
+    def submit_stop(self, symbol: str, qty: float, stop_price: float, client_order_id: str, side: str = "sell") -> dict:
+        """side=sell protegge un acquisto (stop sotto), side=buy protegge uno short (stop sopra)."""
+        body = {"symbol": symbol, "qty": str(int(qty)), "side": side, "type": "stop", "time_in_force": "gtc",
                 "stop_price": _fmt_price(stop_price), "client_order_id": client_order_id}
         return self._order(self._req("POST", PAPER_URL + "/v2/orders", body, retries=1))
 
@@ -227,29 +228,32 @@ class FakeBroker:
         s = self._load()
         s["prices"][symbol] = price
         for o in s.setdefault("stops", []):
-            if o["status"] == "new" and o["symbol"] == symbol and price <= o["stop_price"] and symbol in s["positions"]:
+            side = o.get("side", "sell")
+            hit = price <= o["stop_price"] if side == "sell" else price >= o["stop_price"]
+            if o["status"] == "new" and o["symbol"] == symbol and hit and symbol in s["positions"]:
                 pos = s["positions"][symbol]
-                qty = min(o["qty"], pos["qty"])
-                s["cash"] += qty * price
-                pos["qty"] -= qty
-                if pos["qty"] <= 1e-9:
+                qty = min(o["qty"], abs(pos["qty"]))
+                signed = -qty if side == "sell" else qty
+                s["cash"] -= signed * price
+                pos["qty"] += signed
+                if abs(pos["qty"]) <= 1e-9:
                     s["positions"].pop(symbol)
                 o.update(status="filled", filled_avg_price=price)
-                s["orders"].append({"client_order_id": o["client_order_id"], "symbol": symbol, "side": "sell",
+                s["orders"].append({"client_order_id": o["client_order_id"], "symbol": symbol, "side": side,
                                     "qty": qty, "status": "filled", "filled_avg_price": price})
         self._save(s)
 
     def open_stops(self) -> list[dict]:
         return [dict(o) for o in self._load().get("stops", []) if o["status"] == "new"]
 
-    def submit_stop(self, symbol: str, qty: float, stop_price: float, client_order_id: str) -> dict:
+    def submit_stop(self, symbol: str, qty: float, stop_price: float, client_order_id: str, side: str = "sell") -> dict:
         s = self._load()
-        held = s["positions"].get(symbol, {}).get("qty", 0) - sum(o["qty"] for o in s.get("stops", [])
-                                                                 if o["status"] == "new" and o["symbol"] == symbol)
+        held = abs(s["positions"].get(symbol, {}).get("qty", 0)) - sum(o["qty"] for o in s.get("stops", [])
+                                                                       if o["status"] == "new" and o["symbol"] == symbol)
         if qty > held + 1e-9:
             raise BrokerRejected("insufficient qty available for order")
         o = {"id": f"stop{len(s.setdefault('stops', []))}", "client_order_id": client_order_id, "symbol": symbol,
-             "qty": float(qty), "stop_price": float(_fmt_price(stop_price)), "status": "new"}
+             "qty": float(qty), "stop_price": float(_fmt_price(stop_price)), "status": "new", "side": side}
         s["stops"].append(o)
         self._save(s)
         return dict(o)
@@ -284,7 +288,7 @@ class FakeBroker:
         for k, p in s["positions"].items():
             price = s["prices"][k]
             out[k] = {"qty": p["qty"], "avg_entry": p["avg"], "price": price, "market_value": p["qty"] * price,
-                      "plpc": price / p["avg"] - 1}
+                      "plpc": (price / p["avg"] - 1) * (1 if p["qty"] > 0 else -1)}
         return out
 
     def orders_since(self, hours: int = 48) -> list[dict]:
@@ -305,22 +309,27 @@ class FakeBroker:
         qty = float(_fmt_qty(symbol, qty))
         price = s["prices"][symbol]
         pos = s["positions"].get(symbol, {"qty": 0.0, "avg": price})
-        if side == "buy":
-            if qty * price > s["cash"]:
-                raise BrokerRejected("insufficient buying power")
-            pos = {"qty": pos["qty"] + qty, "avg": (pos["qty"] * pos["avg"] + qty * price) / (pos["qty"] + qty)}
-            s["cash"] -= qty * price
-            s["positions"][symbol] = pos
+        old = pos["qty"]
+        signed = qty if side == "buy" else -qty
+        reserved = sum(o["qty"] for o in s.get("stops", []) if o["status"] == "new" and o["symbol"] == symbol)
+        if old > 0 and side == "sell" and qty > old - reserved + 1e-9:
+            raise BrokerRejected("insufficient qty available for order")
+        if old < 0 and side == "buy" and qty > -old - reserved + 1e-9:
+            raise BrokerRejected("insufficient qty available for order")
+        if old == 0 and side == "sell" and (is_crypto(symbol) or not s.get("allow_short", True)):
+            raise BrokerRejected("insufficient qty available for order")
+        if signed > 0 and old >= 0 and qty * price > s["cash"]:
+            raise BrokerRejected("insufficient buying power")
+        new = old + signed
+        if old == 0 or old * signed > 0:
+            avg = (abs(old) * pos["avg"] + qty * price) / (abs(old) + qty)
         else:
-            reserved = sum(o["qty"] for o in s.get("stops", []) if o["status"] == "new" and o["symbol"] == symbol)
-            if qty > pos["qty"] - reserved + 1e-9:
-                raise BrokerRejected("insufficient qty available for order")
-            s["cash"] += qty * price
-            pos["qty"] -= qty
-            if pos["qty"] <= 1e-9:
-                s["positions"].pop(symbol, None)
-            else:
-                s["positions"][symbol] = pos
+            avg = pos["avg"]
+        s["cash"] -= signed * price
+        if abs(new) <= 1e-9:
+            s["positions"].pop(symbol, None)
+        else:
+            s["positions"][symbol] = {"qty": new, "avg": avg}
         order = {"client_order_id": client_order_id, "symbol": symbol, "side": side, "qty": qty,
                  "status": "filled", "filled_avg_price": price}
         s["orders"].append(order)
