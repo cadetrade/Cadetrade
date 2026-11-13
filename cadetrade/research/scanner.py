@@ -168,7 +168,9 @@ def stats(daily: pd.Series, lev=1.0) -> dict:
             "totale": (eq.iloc[-1] - 1) * 100}
 
 
-def main(broker, days=370):
+def main(broker, days=None):
+    import os
+    days = days or int(os.environ.get("SCAN_DAYS", "370"))
     data = fetch_many(broker, list(UNIVERSE), days)
     print(f"titoli con dati: {len(data)}", flush=True)
     per_day, first_vol, prev_close = build_days(data)
@@ -178,7 +180,7 @@ def main(broker, days=370):
     freq = pd.Series([s for v in chosen.values() for s in v]).value_counts()
     print(f"\ngiorni testati: {len(chosen)}, titoli scelti in media al giorno: {np.mean([len(v) for v in chosen.values()]):.1f}")
     print("i più scelti: " + ", ".join(f"{s} {n}" for s, n in freq.head(12).items()))
-    print("\n=== INTRADAY SUI TITOLI DEL GIORNO · ultimo anno · costi 0,05% a lato · chiuso ogni sera ===")
+    print(f"\n=== INTRADAY SUI TITOLI DEL GIORNO · {days} giorni · costi 0,05% a lato · chiuso ogni sera ===")
     print(f"{'strategia':13} {'operaz.':>8} {'vinte':>6} {'media/op':>9} {'anno 1x':>9} {'calo 1x':>8} {'anno 2x':>9} {'calo 2x':>8} {'senza costi':>12}")
     for name, fn in STRATEGIES.items():
         daily, nocost, trades = {}, {}, []
@@ -193,6 +195,16 @@ def main(broker, days=370):
         avg = np.mean(trades) * 100 if trades else 0
         print(f"{name:13} {len(trades):8d} {win:5.0f}% {avg:+8.3f}% {a['annuo']:+8.1f}% {a['calo']:+7.1f}% "
               f"{b['annuo']:+8.1f}% {b['calo']:+7.1f}% {stats(nocost)['annuo']:+11.1f}%", flush=True)
+        if name in ("segui 5m", "gap e via"):
+            costly = {}
+            for d, syms in chosen.items():
+                rs = [r for r in (fn(per_day[d][s], prev_close.get((s, d))) for s in syms) if r is not None]
+                costly[pd.Timestamp(d)] = sum(r - 2 * (0.001 - COST) for r in rs) / PICKS
+            costly = pd.Series(costly)
+            print(f"   con costi doppi (0,10% a lato): anno {stats(costly)['annuo']:+.1f}%, calo {stats(costly)['calo']:+.1f}%")
+            for y in sorted(set(daily.index.year)):
+                g, gc = daily[daily.index.year == y], costly[costly.index.year == y]
+                print(f"   {y}: {stats(g)['totale']:+6.1f}% (calo {stats(g)['calo']:+5.1f}%) · costi doppi {stats(gc)['totale']:+6.1f}%  [{len(g)} giorni]")
     for s in ("SPY", "QQQ"):
         try:
             c = broker.daily_bars(s, days)["close"]
